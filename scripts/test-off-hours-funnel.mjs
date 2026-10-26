@@ -198,7 +198,7 @@ const teaser = readTeaser({
     authority_gap_flag: false,
     multi_department_friction: 2,
     risk_tier: "HIGH",
-    formula: "",
+    formula: "DRI 72 = Δ40 + Φ13.8 + Ψ12 + Γ6.2 (Z=0.8) | Tier: HIGH | Authority gap: false",
     dialogue_stall: {},
     stakeholder_dispersion: { index: 10, authority_gap: false, multi_department_friction: 2, persona_breakdown: {}, flags: [] },
   },
@@ -207,6 +207,7 @@ const teaser = readTeaser({
   immediate_remediation: ["Get the champion to book the security review."],
 });
 check("teaser keeps the risk score", teaser.risk === 72 && teaser.verdict === "Recoverable");
+check("teaser keeps main-line DRI formula", /Δ|Φ|Ψ|Γ/.test(teaser.formula ?? ""));
 check("teaser keeps the detractor quote", /security to look/i.test(teaser.quote));
 check("this-week plan is separate from the quote", teaser.thisWeek[0]?.includes("security review"));
 

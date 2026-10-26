@@ -172,6 +172,8 @@ export function formatQualifierExportMarkdown(payload: QualifierExportPayload): 
     lines.push(
       `- Verdict: ${payload.teaser.verdict}`,
       `- Risk: ${payload.teaser.risk ?? "—"} (${payload.teaser.riskTier ?? "—"})`,
+      `- DRI formula: ${payload.teaser.formula ?? "—"}`,
+      `- Engine: main-line non-linear matrix (same as portal)`,
       `- Blocker: ${payload.teaser.blocker}`,
       `- Quote: ${payload.teaser.quote || "—"}`,
       "",

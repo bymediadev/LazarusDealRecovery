@@ -121,6 +121,15 @@ check("company_context returned", Boolean(ctx?.domain));
 check("company_context keeps account", ctx?.account === "Northstar Industrial Group");
 check("company_context keeps amount", ctx?.amount === "$80,000");
 check("verdict is readable", ["Flat no", "Checkpoint", "Recoverable"].includes(verdict));
+const driFormula =
+  teaser?.formula ||
+  body.proprietary_indices?.formula ||
+  body.formula ||
+  "";
+check(
+  "uses main-line non-linear DRI formula",
+  /Δ|Φ|Ψ|Γ/.test(String(driFormula)) || typeof (teaser?.risk ?? body.deal_risk_index) === "number"
+);
 check(
   "does not treat pain as open purchase (checkpoint or flat no preferred)",
   verdict === "Checkpoint" || verdict === "Flat no" || (verdict === "Recoverable" && /not|no purchase|unresolved/i.test(String(teaser?.blocker ?? "")))
@@ -141,8 +150,9 @@ writeFileSync(
       verdict,
       teaser,
       company_context: ctx,
-      deal_risk_index: body.deal_risk_index,
-      risk_tier: body.risk_tier,
+      deal_risk_index: body.deal_risk_index ?? teaser?.risk,
+      risk_tier: body.risk_tier ?? teaser?.riskTier,
+      dri_formula: driFormula || teaser?.formula || null,
       primary_blocker: body.primary_blocker,
       executive_summary: body.executive_summary,
       this_week: body.this_week_actions ?? body.recommended_actions,

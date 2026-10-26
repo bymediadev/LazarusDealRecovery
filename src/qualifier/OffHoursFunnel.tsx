@@ -83,7 +83,8 @@ function leadMessage(input: {
   if (input.teaser) {
     lines.push(
       `Verdict: ${input.teaser.verdict}`,
-      `Deal risk: ${input.teaser.risk ?? "—"}`,
+      `Deal risk: ${input.teaser.risk ?? "—"} (${input.teaser.riskTier ?? "—"})`,
+      `DRI: ${input.teaser.formula ?? "main-line non-linear matrix"}`,
       `Blocker: ${input.teaser.blocker}`,
       `Quote: ${input.teaser.quote}`
     );
@@ -886,8 +887,9 @@ export default function OffHoursFunnel({ active, arrival = "site", onOpenPortal 
             Scoring the redacted transcript
           </h2>
           <p className="ohq-lead" role="status">
-            The deal engine is reading what you confirmed, plus the company site and amount you typed. The original
-            text was not attached.
+            The same main-line deal engine as the portal — Force Interaction maps the evidence, then the
+            non-linear Deal Risk Index (velocity, entropy, sentiment, stakeholder authority) writes the
+            score. Company site and amount you typed are included. The original text was not attached.
           </p>
         </>
       )}
@@ -904,6 +906,13 @@ export default function OffHoursFunnel({ active, arrival = "site", onOpenPortal 
                 ? ` (${report.company_context.amount})`
                 : ""}
               . {report.company_context.profile}
+            </p>
+          )}
+          {(teaser.risk != null || teaser.formula) && (
+            <p className="ohq-lead">
+              Deal Risk Index: {teaser.risk ?? "—"}
+              {teaser.riskTier ? ` (${teaser.riskTier})` : ""}
+              {teaser.formula ? `. ${teaser.formula}` : ""}
             </p>
           )}
           {teaser.verdict === "Flat no" && <p className="ohq-next">{FLAT_NO_DIRECTIVE}</p>}

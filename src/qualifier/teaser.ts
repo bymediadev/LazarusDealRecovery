@@ -3,6 +3,8 @@ import type { PostMortemResult, StakeholderSignal } from "../types";
 export type DealTeaser = {
   risk: number | null;
   riskTier: string | null;
+  /** Non-linear DRI equation from the main-line matrix (Δ/Φ/Ψ/Γ). */
+  formula: string | null;
   verdict: string;
   blocker: string;
   quote: string;
@@ -37,10 +39,14 @@ function detractorQuote(people: StakeholderSignal[] | undefined): string {
   return chosen?.evidence?.trim() ?? "";
 }
 
-/** Pull the teaser fields off a post-mortem. The this-week list stays off the page until a morning is booked. */
+/** Pull the teaser fields off a post-mortem. Same main-line matrix DRI as portal analysis. */
 export function readTeaser(result: PostMortemResult): DealTeaser {
   const indices = result.proprietary_indices;
   const risk = typeof indices?.deal_risk_index === "number" ? indices.deal_risk_index : null;
+  const formula =
+    typeof indices?.formula === "string" && indices.formula.trim()
+      ? indices.formula.trim()
+      : null;
   const verdict = scoreVerdict(result);
   const force = (result.causal_forces ?? []).find((item) => item.type === "Constraint" || item.type === "Structural");
   const blocker =
@@ -57,6 +63,7 @@ export function readTeaser(result: PostMortemResult): DealTeaser {
   return {
     risk,
     riskTier: indices?.risk_tier ?? null,
+    formula,
     verdict,
     blocker,
     quote,
