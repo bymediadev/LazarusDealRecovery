@@ -1,0 +1,144 @@
+﻿LAZARUS ENTERPRISE OPERATIONAL MASTERPRINT
+Dual-Branch Architecture, Standalone Architecture, and White-Label GTM Framework
+Document Classification: Internal Strategic & Technical ArchitectureTarget Execution Window: Phase 1 Setup Post-November 6 Renewal
+EXECUTIVE SUMMARY
+Lazarus Deal Recovery is transitioning from a single hosted multi-tenant application to a dual-track distribution model inspired by enterprise platforms like Adobe and WordPress.
+
+The public-facing brand, domain, and web infrastructure (www.getldr.ca) will remain intact as a frictionless, self-service lead generation portal and lightweight cloud option.
+
+Simultaneously, a secondary enterprise branch is being established to deliver a Standalone Company Install model. This branch allows mid-market companies and strategic partners (e.g., The Elite Point) to deploy, white-label, and run the Lazarus analytical engine directly on their own isolated infrastructure, guaranteeing complete data sovereignty and a zero-upstream-telemetry footprint.
+SECTION 1: THE DUAL-BRANCH MODEL (STRATEGIC FRAMEWORK)
+To capture transactional, low-touch revenue while simultaneously closing high-value mid-market and channel partnerships, operations are split into two parallel product tracks utilizing the exact same core analytical algorithms.
+Track 1: The Self-Service Cloud (The Public Branch)
+Canonical Destination: www.getldr.ca
+
+Infrastructure Stack: Static frontend hosted on GitHub Pages; centralized Node/Express API running on Render (https://onrender.com).
+Commercial Positioning: High-velocity, low-barrier storefront. Prospective buyers, individual reps, and small business owners can instantly drop transcripts or run 5 free diagnostic assessments to evaluate deal health.
+Data Lifespan: Strict retention limits enforced by an automated daily GitHub Action at 03:00 UTC (.github/workflows/purge-retention.yml), executing a POST /api/admin/purge-retention to securely scrub raw text assets.
+Track 2: The Enterprise Standalone Install (The White-Label Branch)
+Canonical Destination: Deployed natively on client infrastructure or custom partner subdomains (e.g., https://theelitepoint.com).
+
+Infrastructure Stack: Downloadable Docker container or self-hosted deployment package running an isolated local database and Express instance.
+Commercial Positioning: Designed exclusively for enterprise consulting firms, managed service providers (MSPs), and mid-market sales organizations who refuse to allow external third-party tracking of private customer conversations.
+Data Lifespan: Configured dynamically by the clientâ€™s internal IT administrator. Data retention can span from immediate memory-space volatility to permanent on-premise archiving.
+
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+
+â”‚          Lazarus Core Engine           â”‚
+
+â”‚  (Gemini + scoring.ts + grounding.ts)  â”‚
+
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+
+                    â”‚
+
+         â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+
+         â–¼                     â–¼
+
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+
+â”‚  Branch 1: Cloud  â”‚ â”‚Branch 2:Standaloneâ”‚
+
+â”‚  (www.getldr.ca)  â”‚ â”‚ (White-Label)     â”‚
+
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+SECTION 2: TECHNICAL ARCHITECTURE & DECOUPLING BLUEPRINT
+The current application code found within the bymediadev/Lazarus repository is uniquely architected for this architectural pivot. Because the analytical loop enforces a strict multi-layered decoupling, separating the operational database from the presentation layer requires zero core algorithmic modifications.
+1. The Three-Layer Production Architecture
+The application runs on a strict data-flow isolation model:
+
+Evidence Ingestion: Raw input text or automated integration payloads (Zoom RTMS, HubSpot, Google Meet, Teams) are piped directly to the Google Gemini API. The LLM acts strictly as a structured extraction mechanism (no deal scoring or predictive reasoning occurs inside the model output).
+Deterministic Compilation: The extracted structured parameters are passed to server/scoring.ts. This file serves as a mathematical rule engine that computes the Deal Risk Index (DRI), trajectory vectors, and stakeholder friction models deterministically based on standard B2B sales logic.
+Read-Only Projection Layer: The computed matrices are securely committed to the database and projected on a clean UI view, protecting the underlying proprietary mathematical weights from client visibility.
+2. Standalone Environment Infrastructure (.env.standalone)
+When an enterprise partner downloads and deploys the application locally, the system bypasses the centralized cloud configuration entirely. A specialized .env.standalone file configures the isolated system rules natively:# ==============================================================================
+
+# LAZARUS ENTERPRISE STANDALONE CONFIGURATION TEMPLATE
+
+# ==============================================================================
+
+NODE_ENV=production
+
+STANDALONE_INSTALL=true
+
+# White-Label Presentation UI Brand Tokens
+
+WHITE_LABEL_BRAND_NAME="The Elite Point Relationship Engine"
+
+CUSTOM_BRAND_LOGO_URL="https://theelitepoint.com"
+
+# Isolated Local Data Infrastructure
+
+SUPABASE_URL=http://localhost:5432
+
+SUPABASE_SERVICE_ROLE_KEY=ey... # Local instance infrastructure access key
+
+FRONTEND_ORIGIN=https://theelitepoint.com
+
+PUBLIC_API_URL=https://theelitepoint.com
+
+# Isolated Client Infrastructure Keys
+
+GEMINI_API_KEY=AIzaSy...         # Managed directly via Client corporate billing
+
+OPENROUTER_API_KEY=sk-or-...     # Secondary local failover gateway
+
+# Operational Parameter Levers
+
+DATA_RETENTION_DAYS=9999          # Client-controlled compliance window
+
+PURGE_CRON_SECRET=local_secure_cron_token_xyz
+3. Database Schema Application Sequence
+To spin up a pristine, self-hosted white-label instance, the clientâ€™s database administrator executes your structured Supabase/PostgreSQL schema layers in sequential order:
+
+supabase/setup.sql â€“ Instantiates foundational tables, parameters, and core structural entities.
+supabase/migrations/003_enterprise_rls.sql â€“ Activates core security barriers and workspace logical partitions.
+supabase/migrations/004_retention_purge.sql â€“ Hooks local administrative cron tasks for internal compliance management.
+supabase/migrations/005_lockdown_security_definer_rpc.sql â€“ Fences the backend API, strictly enforcing read-only visualization privileges to the presentation UI while preserving write authorities inside the system context.
+supabase/migrations/006_rescue_outcomes.sql â€“ Mounts the automated 0-to-90 day strategic playbook schema layer.
+SECTION 3: DATA ISOLATION & "ZERO UPSTREAM ACCESS" PROOF
+To confidently sign contracts with corporate enterprise IT departments, the codebase must programmatically verify that Lazarus maintains zero visibility, tracking, or telemetry access into their data.[ Client Infrastructure Perimeter ]
+
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+
+â”‚  Incoming Sales Data (Meetings/Transcripts/Emails)    â”‚
+
+â”‚                           â”‚                            â”‚
+
+â”‚                           â–¼                            â”‚
+
+â”‚              Local Express API Server                  â”‚
+
+â”‚                           â”‚                            â”‚
+
+â”‚            â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”             â”‚
+
+â”‚            â–¼                             â–¼             â”‚
+
+â”‚   Google Gemini API              Local Database        â”‚
+
+â”‚  (Client Enterprise Account)   (Client Supabase/Postgres)â”‚
+
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+
+  NO OUTBOUND TELEMETRY TO LAZARUS
+1. Complete Physical Database Fencing
+In the public cloud deployment, security utilizes logical Row-Level Security (RLS) to divide shared infrastructure. In the Standalone Install branch, isolation becomes physical. The application writes and queries exclusively against the database instance defined via ISOLATED_SUPABASE_URL. No centralized master registry is pinged, ensuring that the raw structural metrics never escape the customer's secure network parameter.
+SECTION 4: ENTERPRISE GOVERNANCE, UPDATES & INTEGRATION SCOPE
+1. Isolated OAuth & Webhook Routing
+For all standalone and white-label deployments, third-party integrations (HubSpot, Zoom, Google Meet, Microsoft Teams) operate entirely via client-owned developer credentials.
+All webhook event subscriptions and OAuth redirect URIs terminate directly at the client's local Express server endpoint (PUBLIC_API_URL).
+No intermediary proxy or central Lazarus routing server intercepts meeting transcripts or CRM payloads during transit.
+2. Containerized Versioning & Update Management
+To maintain intellectual property protection while ensuring client stability:
+Lazarus retains exclusive compilation rights to the underlying core analytics engine and deterministic scoring logic (server/scoring.ts).
+Updates are delivered via signed, immutable Docker container tags pushed to a private container registry.
+Client IT administrators pull container updates on their own schedule, executing local database migration scripts (npm run migrate:local) via standard CI/CD pipelines or manual terminal execution.
+3. Local Audit Logging & Compliance
+Standalone instances maintain a local, tamper-evident audit log tracking:
+System configuration modifications.
+Data retention purge executions.
+User permission adjustments within the local Supabase Row-Level Security (RLS) boundary.
+This ensures full alignment with enterprise data governance and compliance mandates without requiring outbound data telemetry.
+

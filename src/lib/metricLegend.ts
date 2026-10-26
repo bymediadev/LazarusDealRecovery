@@ -21,7 +21,7 @@ export const METRIC_LEGEND: readonly MetricLegendEntry[] = [
     id: "deal-risk-score",
     term: "Deal Risk Score",
     definition:
-      "Evidence the deal may stall further or be lost, from viability, constraint, structural lock-in, dispersion, stall language, timing, and enabler strength. Not a close probability.",
+      "Non-linear Deal Risk Index from stage velocity decay, unanswered-touch entropy, sentiment memory, and stakeholder authority weights. Force Interaction maps evidence; the matrix writes this score. Not a close probability.",
     reportMapsTo:
       "Shows as the top Forecast snapshot score and Deal Risk Index in the report / CRM notes.",
     scoreKey: "deal_risk_index",

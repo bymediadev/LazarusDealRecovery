@@ -84,6 +84,7 @@ import { consumeForLlmRoute, preferOpenWeightsFor, resolveModelTierForUser } fro
 import { registerBillingRoutes, registerBillingWebhook } from "./billingRoutes.js";
 import { apiEventsMiddleware, setApiErrorLocal } from "./apiEvents.js";
 import { registerFounderRoutes } from "./founderRoutes.js";
+import { registerEngineRoutes } from "./routes/engine.js";
 import { registerTenantKeyRoutes } from "./tenantKeyRoutes.js";
 import { registerMeDealRoutes } from "./meDeals.js";
 import { registerTelemetryRoutes } from "./telemetry.js";
@@ -839,6 +840,7 @@ registerContactRoutes(app);
 registerOffHoursLeadRoutes(app);
 registerOffHoursInviteRoutes(app);
 registerFounderRoutes(app);
+registerEngineRoutes(app);
 registerTenantKeyRoutes(app);
 registerMeDealRoutes(app);
 registerTelemetryRoutes(app);
@@ -848,9 +850,11 @@ registerSeoPageRoutes(app, publicPath);
 app.get("/api/runtime", async (_req, res) => {
   try {
     const cfg = await getRuntimeConfig();
+    const { resolveBrandTokens } = await import("./engine/branding.js");
     res.json({
       analyses_paused: cfg.analyses_paused,
       pause_message: cfg.pause_message,
+      brand: resolveBrandTokens(),
       captcha: publicCaptchaConfig(),
       stripe: isStripeConfigured(),
     });

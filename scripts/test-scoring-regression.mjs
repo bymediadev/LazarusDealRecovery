@@ -361,10 +361,19 @@ function assertFlatRecoverablePath(label, scores) {
 
 function evalDriFormula(formula) {
   const rhs = formula.split("=")[1]?.split("|")[0] ?? "";
+  // Non-linear matrix form: DRI N = Δa + Φb + Ψc + Γd (Z=…)
+  const greek = rhs.match(
+    /Δ\s*([\d.]+)\s*\+\s*Φ\s*([\d.]+)\s*\+\s*Ψ\s*([\d.]+)\s*\+\s*Γ\s*([\d.]+)/
+  );
+  if (greek) {
+    const value = Number(greek[1]) + Number(greek[2]) + Number(greek[3]) + Number(greek[4]);
+    return Math.min(100, Math.max(0, Math.round(value)));
+  }
   const expr = rhs
     .replace(/timing_penalty\(10\)/g, "10")
     .replace(/×/g, "*")
     .replace(/−/g, "-")
+    .replace(/\(Z=[^)]+\)/g, "")
     .trim();
   if (!/^[\d.+\-*\s()]+$/.test(expr)) {
     throw new Error(`Unparseable DRI formula: ${expr}`);
@@ -495,8 +504,8 @@ try {
   console.error("FAIL: Northline DRI formula could not be evaluated", err);
   failed = true;
 }
-if (!northlinePi.formula.includes("timing_penalty(10)")) {
-  console.error("FAIL: Northline formula should print the timing penalty", northlinePi.formula);
+if (!/Δ|Φ|Ψ|Γ/.test(northlinePi.formula)) {
+  console.error("FAIL: Northline formula should print non-linear DRI terms", northlinePi.formula);
   failed = true;
 }
 const northlinePath = cycleViabilities(northline);
@@ -701,8 +710,8 @@ if (suppressedPath[2] !== suppressedFrozen.viability_score || !assertFlatRecover
   }
   failed = true;
 }
-if (!suppressedPi.formula.includes("timing_penalty(10)")) {
-  console.error("FAIL: Suppressed Northline formula should print the timing penalty", suppressedPi.formula);
+if (!/Δ|Φ|Ψ|Γ/.test(suppressedPi.formula)) {
+  console.error("FAIL: Suppressed Northline formula should print non-linear DRI terms", suppressedPi.formula);
   failed = true;
 }
 try {
@@ -1126,9 +1135,8 @@ for (const input of riskInputs) {
   };
   const report = compileDealRiskReport(frozen, input.dispersion, input.stall);
   const repeat = compileDealRiskReport(frozen, input.dispersion, input.stall);
-  const penaltyApplies = input.timing_factor <= 5 && input.constraint_pressure > 40;
   const shape = new RegExp(
-    `^DRI ${report.deal_risk_index} = 0\\.30×\\(100−${input.viability_score}\\) \\+ 0\\.25×${input.constraint_pressure} \\+ 0\\.15×${input.structural_lock_in} \\+ 0\\.20×${input.dispersion} \\+ 0\\.10×\\d+${penaltyApplies ? " \\+ timing_penalty\\(10\\)" : ""} − 0\\.15×${input.enabler_strength}$`
+    `^DRI ${report.deal_risk_index} = Δ[\\d.]+ \\+ Φ[\\d.]+ \\+ Ψ[\\d.]+ \\+ Γ[\\d.]+ \\(Z=[\\d.]+\\)$`
   );
   let evaluated;
   try {
@@ -1142,8 +1150,7 @@ for (const input of riskInputs) {
     evaluated !== report.deal_risk_index ||
     report.formula !== repeat.formula ||
     report.deal_risk_index !== repeat.deal_risk_index ||
-    !shape.test(report.formula) ||
-    penaltyApplies !== report.formula.includes("timing_penalty(10)")
+    !shape.test(report.formula)
   ) {
     console.error("FAIL: Reporting formula drifted from the index", input, report, evaluated);
     failed = true;
@@ -2184,8 +2191,8 @@ if (doubledFreeze.frozen.structural_lock_in !== 90 || doubledFreeze.frozen.const
   failed = true;
 }
 const matrixPi = deriveProprietaryIndices(matrixDeal.frozen, [], "");
-if (!matrixPi.formula.includes("0.25×75") || !matrixPi.formula.includes("0.15×90")) {
-  console.error("FAIL: Independent structural and constraint scores should both enter the risk formula", matrixPi.formula);
+if (!/Δ|Φ|Ψ|Γ/.test(matrixPi.formula) || !/DRI \d+/.test(matrixPi.formula)) {
+  console.error("FAIL: Non-linear DRI formula should print Δ Φ Ψ Γ terms", matrixPi.formula);
   failed = true;
 }
 const matrixStatus = statusFromTrajectory(matrixDeal.frozen.trajectory_type, "STALLED — HIGH RISK", matrixPi.risk_tier);

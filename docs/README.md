@@ -47,6 +47,17 @@ ICP and outreach rules for agents: `.cursor/skills/icp/SKILL.md` (local Cursor s
 
 ---
 
+## Architecture / framework
+
+| Doc | Use when |
+|-----|----------|
+| [architecture/FRAMEWORK_CONTRACT.md](./architecture/FRAMEWORK_CONTRACT.md) | Canonical Two-Turbo / Gate 0 / DRI / hooks contract |
+| [architecture/masterprint.md](./architecture/masterprint.md) | Dual-branch cloud + standalone white-label |
+| [architecture/two-turbo.md](./architecture/two-turbo.md) | Two-Turbo orchestration specification |
+| [architecture/hardened-math.md](./architecture/hardened-math.md) | Non-linear DRI and gatekeeper math |
+| [architecture/product-hooks.md](./architecture/product-hooks.md) | Morning briefing, scorecard, Ghost-Buster, board report |
+| [architecture/benchmarks.md](./architecture/benchmarks.md) | Calibration parameters and test models |
+
 ## Engineering notes
 
 | Doc | Use when |

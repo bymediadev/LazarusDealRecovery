@@ -32,8 +32,18 @@ function clip(value: unknown, max: number): string | null {
   return t.slice(0, max);
 }
 
+/** Standalone / white-label installs keep zero upstream Lazarus telemetry. */
+export function isStandaloneInstall(): boolean {
+  const flag = (process.env.STANDALONE_INSTALL ?? "").trim().toLowerCase();
+  return flag === "1" || flag === "true" || flag === "yes";
+}
+
 export function registerTelemetryRoutes(app: Express): void {
   app.post("/api/telemetry/crash", async (req, res) => {
+    if (isStandaloneInstall()) {
+      res.status(204).end();
+      return;
+    }
     if (overHourlyCap(req)) {
       res.status(204).end();
       return;
