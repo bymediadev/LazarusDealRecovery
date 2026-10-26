@@ -440,16 +440,14 @@ export default function MarketingHome({
             <summary>What sales framework breaks the deal down?</summary>
             <div className="marketing-qa-panel">
               <p>
-                The Force Interaction Framework. Gemini only maps words that were actually spoken.
+                The Force Interaction Framework maps spoken evidence. Gemini only maps words that
+                were actually spoken — it does not write the Deal Risk Index.
               </p>
               <p>
-                Each quote is one force: an enabler that moves the deal, a constraint that stalls
-                it, intent, timing, or behavior. The people map names the champion, a hidden
-                detractor, and a decision maker who was not on the call.
-              </p>
-              <p>
-                The server scores those forces. That score is recoverable or a flat no, the risk
-                score, and the next steps.
+                Each quote is one force: an enabler, constraint, intent, timing, or behavior. Gate 0
+                filters non-deals. The server matrix then scores a non-linear Deal Risk Index from
+                stage velocity, unanswered-touch entropy, sentiment memory, and stakeholder
+                authority. That score is recoverable or a flat no, plus the next steps.
               </p>
             </div>
           </details>

@@ -1,0 +1,12 @@
+{
+  "name": "Hidden IT security blocker",
+  "source": "Call_2025_02_18_TechDemo.txt",
+  "timestamp": "00:34:12",
+  "transcript_excerpt": "We are careful with third-party vendors — data sovereignty and SOC2 usually slow us down before legal clears anything.",
+  "expected": {
+    "flag": "HIDDEN_BLOCKER_DETECTED",
+    "domain": "IT Security Compliance",
+    "champion_reprofile": "DISEMPOWERED",
+    "action": "PATTERN_INTERRUPT_TO_REVIEW_QUEUE"
+  }
+}

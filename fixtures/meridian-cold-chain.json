@@ -1,0 +1,37 @@
+{
+  "name": "Meridian Cold Chain Logistics",
+  "deal_type": "ENTERPRISE_RENEWAL",
+  "commercial_intent_score": 95,
+  "contract_value": 180000,
+  "opportunity_age_days": 112,
+  "stage": "PROPOSAL_REVIEW",
+  "days_stalled": 18,
+  "unanswered_emails": 2,
+  "sentiment": "NEUTRAL",
+  "delta_t": 4,
+  "stakeholders": [
+    {
+      "name": "Robert Chen",
+      "role": "ECONOMIC_BUYER",
+      "title": "CFO",
+      "status": "ACTIVE"
+    },
+    {
+      "name": "Elena Brooks",
+      "role": "CHAMPION",
+      "title": "VP Operations",
+      "status": "ACTIVE"
+    }
+  ],
+  "competitors": ["TrackSphere"],
+  "risk_notes": [
+    "Peak-season freeze risk",
+    "Financial validation gap with CFO",
+    "TrackSphere pilot timeline pressure"
+  ],
+  "expected": {
+    "gate0_omega": 1,
+    "not_suppressed": true
+  },
+  "transcript_excerpt": "Elena: We still need Robert on the commercial path before peak season. Robert: I have not signed off on the TrackSphere comparison yet."
+}

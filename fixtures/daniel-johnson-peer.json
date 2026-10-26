@@ -1,0 +1,14 @@
+{
+  "name": "Daniel Johnson peer networking",
+  "deal_type": "PEER_NETWORKING",
+  "commercial_intent_score": 15,
+  "days_stalled": 30,
+  "unanswered_emails": 4,
+  "expected": {
+    "gate0_omega": 0,
+    "target_stage": "NOT_A_DEAL",
+    "action": "SUPPRESS_OUTREACH",
+    "dri": 0
+  },
+  "transcript_excerpt": "Great connecting at the meetup — happy to intro you to my network, no commercial ask."
+}

@@ -17,6 +17,7 @@ import {
 
 export { isNotAPurchase, isSellerIntroduction, isSoleOperator } from "../src/lib/reportMatrix.js";
 import { intentInputTrace } from "../src/lib/scoreInputTrace.js";
+import { formatDriFormula, telemetryFromAnalysis } from "./engine/driBridge.js";
 
 export type CanonicalEquilibrium = "PINNED" | "MIXED" | "OPEN";
 
@@ -1367,61 +1368,63 @@ export type DealRiskInputs = Pick<
 >;
 
 /**
- * One reporting equation for every transcript:
- * 0.30×(100−viability) + 0.25×constraint + 0.15×structural + 0.20×dispersion
- * + 0.10×stall + timing penalty − 0.15×enabler.
- * The printed terms are the values that are summed.
+ * Non-linear Deal Risk Index (Δ velocity + Φ entropy + Ψ sentiment + Γ stakeholder).
+ * Force weights feed telemetry only — they do not appear in the published equation.
  */
 export function compileDealRiskReport(
   frozen: DealRiskInputs,
   dispersion: number,
-  stallScore: number
+  stallScore: number,
+  stakeholders: StakeholderIndexInput[] = [],
+  stall?: DialogueStallSignals
 ): {
   deal_risk_index: number;
   formula: string;
   timingPenalty: number;
   stallContribution: number;
+  breakdown?: {
+    deltaVelocity: number;
+    phiEntropy: number;
+    psiSentiment: number;
+    gammaStakeholder: number;
+    zStall: number;
+  };
 } {
-  const timingPenalty =
-    frozen.timing_factor <= 5 && frozen.constraint_pressure > 40 ? 10 : 0;
-  const stallContribution = recoverableTrack(frozen) ? Math.min(stallScore, 40) : stallScore;
-  const terms: { text: string; value: number }[] = [
-    {
-      text: `0.30×(100−${frozen.viability_score})`,
-      value: (100 - frozen.viability_score) * 0.3,
-    },
-    {
-      text: `0.25×${frozen.constraint_pressure}`,
-      value: frozen.constraint_pressure * 0.25,
-    },
-    {
-      text: `0.15×${frozen.structural_lock_in}`,
-      value: frozen.structural_lock_in * 0.15,
-    },
-    {
-      text: `0.20×${dispersion}`,
-      value: dispersion * 0.2,
-    },
-    {
-      text: `0.10×${stallContribution}`,
-      value: stallContribution * 0.1,
-    },
-  ];
-  if (timingPenalty > 0) terms.push({ text: "timing_penalty(10)", value: timingPenalty });
-  const deal_risk_index = clamp(
-    terms.reduce((sum, term) => sum + term.value, 0) - frozen.enabler_strength * 0.15
-  );
-  const formula = `DRI ${deal_risk_index} = ${terms.map((term) => term.text).join(" + ")} − 0.15×${frozen.enabler_strength}`;
-  return { timingPenalty, stallContribution, deal_risk_index, formula };
+  const stallSignals: DialogueStallSignals = stall ?? {
+    score: stallScore,
+    deferral_phrase_count: 0,
+    handoff_mention_count: 0,
+    rep_monologue_ratio: null,
+    avg_turn_gap_seconds: null,
+    flagged_patterns: [],
+    observed_patterns: [],
+    inferred_patterns: [],
+  };
+  void dispersion;
+  const decision = telemetryFromAnalysis(frozen, stakeholders, stallSignals);
+  return {
+    deal_risk_index: decision.dri,
+    formula: formatDriFormula(decision),
+    timingPenalty: 0,
+    stallContribution: stallScore,
+    breakdown: decision.breakdown,
+  };
 }
 
-/** Deal Risk Index — higher = more stall/recovery risk. Proprietary composite, not LLM-derived. */
+/** Deal Risk Index — higher = more stall/recovery risk. Non-linear matrix, not LLM-derived. */
 export function computeDealRiskIndex(
   frozen: FrozenDerivation,
   dispersion: StakeholderDispersion,
-  stall: DialogueStallSignals
+  stall: DialogueStallSignals,
+  stakeholders: StakeholderIndexInput[] = []
 ): number {
-  return compileDealRiskReport(frozen, dispersion.index, stall.score).deal_risk_index;
+  return compileDealRiskReport(
+    frozen,
+    dispersion.index,
+    stall.score,
+    stakeholders,
+    stall
+  ).deal_risk_index;
 }
 
 function viabilityPathSentence(frozen: FrozenDerivation, blocker: string): string {
@@ -1450,7 +1453,8 @@ export function explainScores(
   frozen: FrozenDerivation,
   dispersion: StakeholderDispersion,
   stall: DialogueStallSignals,
-  blocker = ""
+  blocker = "",
+  stakeholders: StakeholderIndexInput[] = []
 ): ScoreExplanations {
   const departments = dispersion.department_mentions;
   const departmentList = departments.length ? departments.join(", ") : "none";
@@ -1500,22 +1504,21 @@ export function explainScores(
     deal_risk: {
       metric: "Deal Risk Index",
       summary:
-        "Evidence the deal may stall further or be lost, from the published risk equation. Not a close probability.",
+        "Non-linear risk from stage velocity decay (Δ), unanswered-touch entropy (Φ), sentiment memory (Ψ), and stakeholder authority (Γ). Not a close probability.",
       factors: [
         {
           basis: "inferred",
-          text: `0.30×(100−viability ${frozen.viability_score}), 0.25×constraint ${frozen.constraint_pressure}, 0.15×structural ${frozen.structural_lock_in}, 0.20×dispersion ${dispersion.index}, 0.10×stall contribution, minus 0.15×enabler ${frozen.enabler_strength}.`,
+          text: formatDriFormula(
+            telemetryFromAnalysis(frozen, stakeholders, stall)
+          ),
         },
         {
           basis: "inferred",
-          text:
-            frozen.timing_factor <= 5 && frozen.constraint_pressure > 40
-              ? "A timing penalty of 10 is included because timing is in the low band and constraint is above 40."
-              : "No timing penalty is included.",
+          text: `Telemetry drawn from timing ${frozen.timing_factor}, constraint ${frozen.constraint_pressure}, stall score ${stall.score}, and mapped stakeholders. Force Interaction supplies evidence; the matrix writes the score.`,
         },
       ],
       caveat:
-        "Recoverable deals cap the stall term at 40 inside this equation. The index explains those inputs. It does not predict a loss date.",
+        "Stage benchmarks forgive longer Legal/Security cycles. The index explains calibrated inputs. It does not predict a loss date.",
     },
     department_friction: {
       metric: "Department Friction Index",
@@ -1594,7 +1597,9 @@ export function deriveProprietaryIndices(
   const { deal_risk_index, formula: equation } = compileDealRiskReport(
     frozen,
     stakeholder_dispersion.index,
-    dialogue_stall.score
+    dialogue_stall.score,
+    stakeholders,
+    dialogue_stall
   );
   const risk_tier = riskTier(deal_risk_index);
   const formula = [
@@ -1612,7 +1617,13 @@ export function deriveProprietaryIndices(
     formula,
     dialogue_stall,
     stakeholder_dispersion,
-    explanations: explainScores(frozen, stakeholder_dispersion, dialogue_stall, blocker),
+    explanations: explainScores(
+      frozen,
+      stakeholder_dispersion,
+      dialogue_stall,
+      blocker,
+      stakeholders
+    ),
   };
 }
 

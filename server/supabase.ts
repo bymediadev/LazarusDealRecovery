@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   constraintBand,
   personaSignature,
@@ -12,6 +12,14 @@ import {
   tenantForReportWrite,
 } from "./reportSanitize.js";
 import { tenantStampForWrite } from "./tenantScope.js";
+
+/** Service-role client for server routes. Null when env is missing. */
+export function getServiceSupabase(): SupabaseClient | null {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_ANON_KEY;
+  if (!url || !key) return null;
+  return createClient(url, key);
+}
 
 export interface SavePostMortemInput {
   userId?: string;
