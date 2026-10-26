@@ -367,7 +367,8 @@ export default function MarketingHome({
             <div className="marketing-qa-panel">
               <p>
                 Recoverable means a purchase is open and a person can still move it. A flat no means
-                the buyer closed it. Not a deal means the buyer refused the client role. Motion not
+                the buyer closed it. Not a deal means no purchase was established — or the buyer
+                explicitly refused the paid client role. Motion not
                 established means the speakers can be read and no purchase was stated, or the
                 speakers cannot be read. The brief says which one, and it does not print a stall
                 score unless the purchase is open and stalled.
@@ -380,7 +381,7 @@ export default function MarketingHome({
               <p>
                 When the speakers can be read and the buyer never opened a purchase, the brief says
                 motion not established and prints no stall score. When nobody is labeled, it says
-                the same thing. Not a deal is reserved for the buyer who refused the client role.
+                the same thing. Not a deal is for no purchase established, or an explicit paid-client refusal.
               </p>
             </div>
           </details>

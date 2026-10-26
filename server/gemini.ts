@@ -20,7 +20,18 @@ import {
   type StakeholderSignal,
 } from "./grounding.js";
 import { alignBlockerNarrative } from "../src/lib/blockerNarrative.js";
-import { diagnosticProfile, isSellingRep, promisedRelationshipSteps, purchaseMotion, recommendedMoveLine, stalledHeadline, validateReportMatrix, type ReportValidation, type RecoverabilityAssessment } from "../src/lib/reportMatrix.js";
+import {
+  diagnosticProfile,
+  explicitClientRefusal,
+  isSellingRep,
+  promisedRelationshipSteps,
+  purchaseMotion,
+  recommendedMoveLine,
+  stalledHeadline,
+  validateReportMatrix,
+  type ReportValidation,
+  type RecoverabilityAssessment,
+} from "../src/lib/reportMatrix.js";
 import { commercialBaselineFromText, type CommercialBaseline } from "../src/lib/commercialBaseline.js";
 import { attributeQuote } from "../src/lib/evidenceAttribution.js";
 import { assessIntentExtraction, buildIntentRetryInstructions } from "../src/lib/intentExtraction.js";
@@ -432,14 +443,18 @@ function applyCanonicalScoring(
     executive_summary: unresolved
       ? "Speakers could not be read. No forecast judgment is published."
       : notAPurchase
-      ? "This call did not open a purchase. The prospect is the owner and declined the client role. The next step is the referral relationship already agreed, and it stays off the forecast."
+      ? explicitClientRefusal(transcript)
+        ? "This call did not open a purchase. The prospect is the owner and declined the client role. The next step is the referral relationship already agreed, and it stays off the forecast."
+        : "This call did not open a purchase. No purchase opportunity was established. Interest was networking or reciprocal introductions, not a paid engagement. Keep any step already promised, and keep it off the forecast."
       : result.executive_summary,
     live_deal_triage: quiet
       ? {
           root_issue: motion.reason,
           core_blocker: unresolved
             ? "None. The speakers are not established."
-            : "None on a purchase. They declined the client role.",
+            : explicitClientRefusal(transcript)
+              ? "None on a purchase. They declined the client role."
+              : "None on a purchase. No purchase was established.",
           department_friction_index: 0,
         }
       : result.live_deal_triage,
@@ -453,7 +468,9 @@ function applyCanonicalScoring(
             : "Business owner and apparent decision-maker. No purchase process was established.",
           classification_rationale: unresolved
             ? "The transcript has no speaker labels, so no person is assigned a role."
-            : "The prospect declined to be the client. The seller offered a referral introduction instead of a close.",
+            : explicitClientRefusal(transcript)
+              ? "The prospect declined to be the client. The seller offered a referral introduction instead of a close."
+              : "No purchase was established. The seller offered networking or a referral path instead of a close.",
         }
       : {
           ...result.force_initialization,

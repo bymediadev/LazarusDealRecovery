@@ -91,9 +91,27 @@ export function isSoleOperator(role = "", evidence = ""): boolean {
   return SOLE_OPERATOR.test(`${role} ${evidence}`);
 }
 
+/** Explicit seller-facing refusal of being the seller's paid client / buyer. */
 const BUYER_DECLINED =
-  /\b(?:not going to be (?:your|the) client|won't be your client|will not be your client|i(?:'m| am) not (?:going to be )?(?:your|the) client|i might be the referral|be the referral|not a buyer|not the buyer|not going to buy|not here to buy)\b/i;
-const BUYER_REFUSAL_NEAR = /\bclient\b[\s\S]{0,80}\bno way\b|\bno way\b[\s\S]{0,80}\bclient\b/i;
+  /\b(?:not going to be (?:your|the) client|won't be your client|will not be your client|i(?:'m| am) not (?:going to be )?(?:your|the) client|not a buyer|not the buyer|not going to buy|not here to buy)\b/i;
+/**
+ * Seller-facing "no way … your/the client".
+ * Negative lookahead blocks "the client to the 40" (networking-group members).
+ */
+const BUYER_REFUSAL_NEAR =
+  /\bno way\b[\s\S]{0,80}\b(?:your client|the client(?!\s+to\b))\b|\b(?:your client|the client(?!\s+to\b))\b[\s\S]{0,80}\bno way\b/i;
+/** Buyer-side networking / referral exchange — not seller mentioning a channel partner on a real deal. */
+const REFERRAL_OR_NETWORKING =
+  /\b(?:i might be the referral|be the referral|send you (?:that|an|the) invitation|networking[- ]?group|room full of|client to the \d+)\b/i;
+
+export const NO_PURCHASE_ESTABLISHED_ROOT =
+  "No purchase opportunity was established during the conversation. The prospect showed interest in networking and reciprocal introductions, while the seller introduced a paid consultation. The prospect did not commit to purchasing it. This is a non-converted conversation, not evidence of a stalled or lost deal.";
+
+/** True only when the buyer explicitly refused the seller's paid client role. */
+export function explicitClientRefusal(transcript: string): boolean {
+  const buyer = buyerLines(transcript) || transcript;
+  return BUYER_DECLINED.test(buyer) || BUYER_REFUSAL_NEAR.test(buyer);
+}
 /** A purchase act the buyer states. The word "budget" alone is not one. */
 const PURCHASE_ACT =
   /\b(not moving this forward|signs? off|has to approve|have to approve|needs to approve|buys in|we can accelerate|send (?:me )?a proposal|platform fee|\bin range\b|signing authority|annual contract|we modeled|nothing is signed|weigh in|platform budget)\b/i;
@@ -215,7 +233,8 @@ function buyerLines(transcript: string): string {
 
 /**
  * Read the transcript before any score is published.
- * A buyer who refuses the client role, with no purchase of their own, is not a deal.
+ * Not a deal when the buyer explicitly refuses the paid client role, or when
+ * the exchange is referral/networking with no purchase act.
  * The word "budget" does not open a purchase. An unlabeled transcript stays unresolved.
  */
 export function purchaseMotion(transcript: string): { motion: PurchaseMotion; reason: string } {
@@ -234,7 +253,8 @@ export function purchaseMotion(transcript: string): { motion: PurchaseMotion; re
     };
   }
   const buyer = turnsText(parsed.turns, "buyer");
-  const declined = BUYER_DECLINED.test(buyer) || BUYER_REFUSAL_NEAR.test(buyer);
+  const declined = explicitClientRefusal(transcript);
+  const referralPath = REFERRAL_OR_NETWORKING.test(buyer) || REFERRAL_OR_NETWORKING.test(transcript);
   const open = PURCHASE_ACT.test(buyer);
   const won = BUYER_WON.test(buyer);
   const lost = BUYER_LOST.test(buyer);
@@ -257,6 +277,13 @@ export function purchaseMotion(transcript: string): { motion: PurchaseMotion; re
     return {
       motion: "not_a_deal",
       reason: "The other person said they are not the buyer. No purchase was opened.",
+    };
+  }
+  if (referralPath && !open) {
+    return {
+      motion: "not_a_deal",
+      reason:
+        "No purchase was established. Interest was networking or reciprocal introductions, not a paid engagement.",
     };
   }
   return {
@@ -377,15 +404,56 @@ export function offeredNetworkingInvite(transcript: string): boolean {
   return /\bsend you (?:that|an|the) invitation\b/i.test(transcript);
 }
 
-function promisedStep(action: string, outcome: string, progress: string, stakeholder: string): string {
+export type RelationshipActionStatus = "Promised / Pending" | "Conditional" | "Proposed" | "Completed";
+
+function promisedStep(
+  action: string,
+  outcome: string,
+  progress: string,
+  stakeholder: string,
+  status: RelationshipActionStatus = "Promised / Pending"
+): string {
   return [
     "Owner: Seller",
     `Stakeholder: ${stakeholder}`,
     `Action: ${action}`,
     `Target outcome: ${outcome}`,
     `Progress evidence: ${progress}`,
+    `Status: ${status}`,
     "Kind: activity",
   ].join(" | ");
+}
+
+/**
+ * Pull the follow-up the seller promised (link, company info, consultation) from the transcript.
+ * Prefer the spoken deliverable over a substituted label like "framework link".
+ */
+export function extractPromisedDeliverable(transcript: string): string | null {
+  const text = transcript ?? "";
+  const patterns: { re: RegExp; pick: (m: RegExpMatchArray) => string }[] = [
+    {
+      re: /\b(?:send|share|email)\s+you\s+(?:a |the |our )?(company information(?:\s+and\s+(?:a |the )?consultation link)?|consultation link|clarity consultation(?: link)?|link to (?:the |our )?[^.!?\n]{3,60}|framework link|[^.!?\n]{0,40}link)\b/i,
+      pick: (m) => m[1].replace(/\s+/g, " ").trim(),
+    },
+    {
+      re: /\b(?:I(?:'ll| will)|we(?:'ll| will))\s+send\s+(?:you\s+)?(?:a |the |our )?(company information(?:\s+and\s+[^.!?\n]{0,40})?|consultation(?: link)?|link)\b/i,
+      pick: (m) => m[1].replace(/\s+/g, " ").trim(),
+    },
+  ];
+  for (const { re, pick } of patterns) {
+    const m = text.match(re);
+    if (m?.[1]) {
+      const deliverable = pick(m).replace(/^the\s+/i, "").replace(/\.$/, "");
+      if (deliverable.length >= 3) return deliverable;
+    }
+  }
+  if (/\bclarity consultation\b/i.test(text) && /\b(send|link)\b/i.test(text)) {
+    return "clarity consultation link";
+  }
+  if (/\bsend you (?:a |the )?link\b/i.test(text)) {
+    return "link";
+  }
+  return null;
 }
 
 /** Steps already promised on a call that never became a purchase. No partnership meeting. */
@@ -399,17 +467,20 @@ export function promisedRelationshipSteps(transcript: string, stakeholderName?: 
         "Send the introduction already promised",
         "The two people are introduced",
         "Either person confirms the introduction happened",
-        who
+        who,
+        "Promised / Pending"
       )
     );
   }
-  if (/\b(send you (?:a |the )?link|framework link|clarity consultation)\b/i.test(text)) {
+  const deliverable = extractPromisedDeliverable(text);
+  if (deliverable) {
     steps.push(
       promisedStep(
-        "Send the framework link already promised",
+        `Send the ${deliverable} already promised`,
         "They can look if they want. No reply is a complete outcome",
         "Only a reply that asks to proceed. Silence stays off the forecast",
-        who
+        who,
+        "Promised / Pending"
       )
     );
   }
@@ -419,7 +490,8 @@ export function promisedRelationshipSteps(transcript: string, stakeholderName?: 
         "Accept the networking-group invitation when they send it",
         "The reciprocal step they offered is taken",
         "The seller is in the group or has a date to visit",
-        who
+        who,
+        "Conditional"
       )
     );
   }
@@ -511,7 +583,7 @@ function hasReferralLanguage(transcript: string): boolean {
 }
 
 function linkWasPromised(transcript: string): boolean {
-  return /\b(send you (?:a |the )?link|framework link|clarity consultation)\b/i.test(transcript);
+  return extractPromisedDeliverable(transcript) != null;
 }
 
 function defenseLines(transcript: string, motion: PurchaseMotion): Pick<
@@ -534,7 +606,9 @@ function defenseLines(transcript: string, motion: PurchaseMotion): Pick<
   } else if (motion === "not_a_deal" && (/\b(finance|residential|business funding)\b/i.test(buyer) || /\b(revenue|doing about)\b/i.test(seller))) {
     falseRead = "A stalled-deal read would treat their own business description as purchase intent. It is their own service.";
   } else if (motion === "not_a_deal") {
-    falseRead = "A stalled-deal read would keep this on the forecast as recoverable. The buyer refused the client role.";
+    falseRead = explicitClientRefusal(transcript)
+      ? "A stalled-deal read would keep this on the forecast as recoverable. The buyer refused the client role."
+      : "A stalled-deal read would keep this on the forecast as recoverable. No purchase was established on the call.";
   } else if (motion === "unresolved" && speakersKnown) {
     falseRead = "A stalled-deal read would score a call where the buyer never opened a purchase.";
   } else if (motion === "unresolved") {
@@ -557,8 +631,8 @@ function defenseLines(transcript: string, motion: PurchaseMotion): Pick<
             : "No buyer condition for reopening was stated.";
   const implied =
     motion === "not_a_deal"
-      ? hasReferralLanguage(transcript)
-        ? "The commercial motion is an exchange of introductions. No purchase was opened."
+      ? hasReferralLanguage(transcript) || !explicitClientRefusal(transcript)
+        ? "The commercial motion is an exchange of introductions. No purchase was established."
         : "The buyer refused the client role. No purchase was opened."
       : motion === "unresolved"
         ? speakersKnown
@@ -1173,13 +1247,15 @@ export function classifyRecoverability(input: {
   evidence?: string;
 }): RecoverabilityAssessment {
   if (isNotAPurchase(input.evidence ?? "")) {
+    const refused = explicitClientRefusal(input.evidence ?? "");
     return {
       status: "FLAT_NO",
       confidence: 75,
       blocking_conditions: [],
       evidence_gaps: [],
-      explanation:
-        "Flat no as a purchase. The prospect declined the client role. The next step is the referral relationship already agreed, not a recovery plan. Viability is the formula result, and it is not a reason to keep this on the forecast.",
+      explanation: refused
+        ? "Flat no as a purchase. The prospect declined the client role. The next step is the referral relationship already agreed, not a recovery plan. Viability is the formula result, and it is not a reason to keep this on the forecast."
+        : `Flat no as a purchase. ${NO_PURCHASE_ESTABLISHED_ROOT} The next step is any relationship action already promised, not a recovery plan. Viability is the formula result, and it is not a reason to keep this on the forecast.`,
     };
   }
   const blocker = input.blocker.toUpperCase();
@@ -1377,6 +1453,7 @@ export function validateReportMatrix(input: {
   });
   const transcript = input.transcript ?? "";
   const notAPurchase = transcript ? isNotAPurchase(transcript) : false;
+  const refusedClient = transcript ? explicitClientRefusal(transcript) : false;
   const purchaseAligned =
     !notAPurchase ||
     (/NOT A PURCHASE/i.test(input.status) && input.recoverabilityStatus === "FLAT_NO");
@@ -1385,9 +1462,13 @@ export function validateReportMatrix(input: {
     passed: purchaseAligned,
     detail: notAPurchase
       ? purchaseAligned
-        ? "The prospect declined the client role. Headline and recoverability stay off the forecast."
-        : "The prospect declined the client role, but the headline or recoverability still treats this as a recoverable purchase."
-      : "No declined-client motion in the transcript.",
+        ? refusedClient
+          ? "The prospect declined the client role. Headline and recoverability stay off the forecast."
+          : "No purchase was established. Headline and recoverability stay off the forecast."
+        : refusedClient
+          ? "The prospect declined the client role, but the headline or recoverability still treats this as a recoverable purchase."
+          : "No purchase was established, but the headline or recoverability still treats this as a recoverable purchase."
+      : "No not-a-deal motion in the transcript.",
   });
   const soleSuppressed = (input.stakeholders ?? []).filter((person) => {
     const label = `${person.persona_type ?? ""} ${person.stance ?? ""}`;

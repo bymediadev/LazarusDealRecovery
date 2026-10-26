@@ -192,6 +192,24 @@ check(
 );
 check("the action's current status stays proposed", confirmed.includes("Current status: Proposed"), confirmed);
 
+const promisedIntro = recoveryActionLines(
+  "Action: Send the introduction already promised | Outcome: The two people are introduced | Progress evidence: Either person confirms the introduction happened | Status: Promised / Pending | Kind: activity"
+);
+check(
+  "a promised introduction is Promised / Pending",
+  promisedIntro.includes("Current status: Promised / Pending"),
+  promisedIntro
+);
+
+const conditionalInvite = recoveryActionLines(
+  "Action: Accept the networking-group invitation when they send it | Outcome: The reciprocal step they offered is taken | Progress evidence: The seller is in the group | Status: Conditional | Kind: activity"
+);
+check(
+  "a networking invite wait is Conditional",
+  conditionalInvite.includes("Current status: Conditional"),
+  conditionalInvite
+);
+
 const held = recoveryActionLines(
   "Action: Hold the technical review | Outcome: Architectural validation and path forward agreed | Progress evidence: A meeting was held and approval action items were identified | Kind: activity"
 );

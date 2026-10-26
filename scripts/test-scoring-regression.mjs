@@ -13,7 +13,7 @@ import { statusFromTrajectory, assertAnalysisSchema } from "../server/gemini.ts"
 import { alignBlockerNarrative } from "../src/lib/blockerNarrative.ts";
 import { commercialBaselineFromText, presentCommercialBaseline } from "../src/lib/commercialBaseline.ts";
 import { DEFER_FORECAST_LINE, forecastGuidance, NON_VIABLE_FORECAST_LINE, NOT_A_PURCHASE_FORECAST_LINE } from "../src/lib/forecastCall.ts";
-import { canonicalImmediateActions, classifyRecoverability, classifyRisk, diagnosticProfile, matrixFacing, parseTurns, promisedRelationshipSteps, publishesStallMetrics, purchaseMotion, recommendedMoveLine, reportCategory, stalledHeadline, validateReportMatrix } from "../src/lib/reportMatrix.ts";
+import { canonicalImmediateActions, classifyRecoverability, classifyRisk, diagnosticProfile, explicitClientRefusal, extractPromisedDeliverable, matrixFacing, parseTurns, promisedRelationshipSteps, publishesStallMetrics, purchaseMotion, recommendedMoveLine, reportCategory, stalledHeadline, validateReportMatrix } from "../src/lib/reportMatrix.ts";
 import { formatCompressedCrmNotes } from "../src/lib/crmNotes.ts";
 import { mergeOverlappingQuotes } from "../src/lib/evidenceQuotes.ts";
 import { lifecycleDelta, lifecyclePhaseFromStatus, presentLifecycleRun, presentThreadImprovement, publishesLifecycleScores, scoreMovement } from "../server/meDeals.ts";
@@ -1476,7 +1476,11 @@ const channelRecovery = classifyRecoverability({
   evidence: channelCall,
 });
 if (channelRecovery.status !== "FLAT_NO") {
-  console.error("FAIL: A declined client role is a flat no in the report matrix", channelRecovery);
+  console.error("FAIL: An explicit client-role refusal is a flat no in the report matrix", channelRecovery);
+  failed = true;
+}
+if (!/declined the client role/i.test(channelRecovery.explanation)) {
+  console.error("FAIL: Explicit your-client refusal keeps refusal wording", channelRecovery);
   failed = true;
 }
 const channelFacing = matrixFacing({
@@ -1501,6 +1505,67 @@ if (
   channelSteps.some((step) => /framework link|partnership/i.test(step))
 ) {
   console.error("FAIL: A referral call keeps the promised steps, including the networking invite", channelSteps);
+  failed = true;
+}
+if (
+  !channelSteps.some((step) => /introduction already promised/i.test(step) && /Status: Promised \/ Pending/i.test(step)) ||
+  !channelSteps.some((step) => /invitation/i.test(step) && /Status: Conditional/i.test(step))
+) {
+  console.error("FAIL: Introduction is promised/pending and networking invite is conditional", channelSteps);
+  failed = true;
+}
+
+const networkingNoRefusal = [
+  "PROSPECT: if you think that, no way a room full of 40 people, I'm going to be the client to the 40.",
+  "PROSPECT: What I'll do is, I'm going to send you that invitation. To that group.",
+  "SELLER: I'll send you the company information and a consultation link. His name is [REFERRAL PARTNER]. I'll put you into a warm connection with him.",
+].join("\n");
+const networkingMotion = purchaseMotion(networkingNoRefusal);
+if (networkingMotion.motion !== "not_a_deal") {
+  console.error("FAIL: Networking non-purchase stays not a deal", networkingMotion);
+  failed = true;
+}
+if (explicitClientRefusal(networkingNoRefusal)) {
+  console.error("FAIL: client-to-the-40 is not an explicit paid-client refusal");
+  failed = true;
+}
+const networkingRecovery = classifyRecoverability({
+  viability: 20,
+  trajectory: "DEFERRED (recoverable)",
+  blocker: "MIXED",
+  intent: 20,
+  forces: [],
+  evidence: networkingNoRefusal,
+});
+if (
+  networkingRecovery.status !== "FLAT_NO" ||
+  /declined the client role|refused the client role/i.test(networkingRecovery.explanation) ||
+  !/no purchase (opportunity )?was established/i.test(networkingRecovery.explanation)
+) {
+  console.error("FAIL: Networking non-deal must say no purchase established, not declined client role", networkingRecovery);
+  failed = true;
+}
+const networkingDiag = diagnosticProfile(networkingNoRefusal);
+if (/refused the client role|declined the client role/i.test(networkingDiag.falseRead + networkingDiag.implied)) {
+  console.error("FAIL: Diagnostics must not invent a client-role refusal", networkingDiag);
+  failed = true;
+}
+const networkingDeliverable = extractPromisedDeliverable(networkingNoRefusal);
+if (!networkingDeliverable || /framework link/i.test(networkingDeliverable)) {
+  console.error("FAIL: Promised deliverable should keep company information / consultation wording", networkingDeliverable);
+  failed = true;
+}
+const networkingSteps = promisedRelationshipSteps(networkingNoRefusal, "Daniel");
+if (
+  networkingSteps.some((step) => /framework link/i.test(step)) ||
+  !networkingSteps.some((step) => /company information|consultation/i.test(step) && /Status: Promised \/ Pending/i.test(step)) ||
+  !networkingSteps.some((step) => /invitation/i.test(step) && /Status: Conditional/i.test(step))
+) {
+  console.error("FAIL: Networking steps keep exact deliverable and statuses", networkingSteps);
+  failed = true;
+}
+if (!explicitClientRefusal("PROSPECT: I am not going to be your client.")) {
+  console.error("FAIL: Explicit your-client refusal still counts");
   failed = true;
 }
 const channelNotes = formatCompressedCrmNotes({

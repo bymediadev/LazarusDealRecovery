@@ -1,3 +1,9 @@
+export type ActionCurrentStatus =
+  | "Promised / Pending"
+  | "Conditional"
+  | "Proposed"
+  | "Completed";
+
 export interface RecoveryActionView {
   /** Action sentence, without the structured labels. */
   action: string;
@@ -9,6 +15,8 @@ export interface RecoveryActionView {
   outcome: string | null;
   progressEvidence: string | null;
   checkpoint: string | null;
+  /** Promised / Pending, Conditional, Proposed, or Completed. */
+  status: ActionCurrentStatus | null;
   missing: string[];
 }
 
@@ -20,7 +28,22 @@ const OUTCOME =
   /\b(agreement|approve|approval|criteria|decision|sign-off|sign off|commit|confirm|validated|obtain)\b/i;
 const MISSING = /^(unknown|n\/a|not stated|not in the evidence)$/i;
 const LABELED_LINE =
-  /^(?:P\d+\s*\|.*|Owner\s*:|Stakeholder\s*:|Action\s*:|Outcome\s*:|Target outcome\s*:|Progress evidence\s*:|Evidence that would show progress\s*:|Required, not yet observed\s*:|Checkpoint\s*:|Source timing\s*:|Kind\s*:|Current status\s*:|Activity$|Outcome$|Activity and outcome$)/i;
+  /^(?:P\d+\s*\|.*|Owner\s*:|Stakeholder\s*:|Action\s*:|Outcome\s*:|Target outcome\s*:|Progress evidence\s*:|Evidence that would show progress\s*:|Required, not yet observed\s*:|Checkpoint\s*:|Source timing\s*:|Kind\s*:|Status\s*:|Current status\s*:|Activity$|Outcome$|Activity and outcome$)/i;
+
+const STATUS_VALUES: ActionCurrentStatus[] = [
+  "Promised / Pending",
+  "Conditional",
+  "Proposed",
+  "Completed",
+];
+
+function parseStatus(text: string): ActionCurrentStatus | null {
+  const labeled = field(text, "Status") || field(text, "Current status");
+  if (!labeled) return null;
+  const normalized = labeled.replace(/^current status:\s*/i, "").trim();
+  const hit = STATUS_VALUES.find((value) => value.toLowerCase() === normalized.toLowerCase());
+  return hit ?? null;
+}
 
 function field(text: string, label: string): string | null {
   const labels =
@@ -78,7 +101,13 @@ function actionBody(text: string): string {
   const unlabeled = text
     .split("|")
     .map((part) => part.trim())
-    .filter((part) => part && !/^(?:P\d+|Owner|Stakeholder|Action|Outcome|Progress evidence|Checkpoint|Kind)\s*:/i.test(part));
+    .filter(
+      (part) =>
+        part &&
+        !/^(?:P\d+|Owner|Stakeholder|Action|Outcome|Progress evidence|Checkpoint|Kind|Status|Current status)\s*:/i.test(
+          part
+        )
+    );
   return (unlabeled.join(" ").trim() || text.trim()).replace(/\.$/, "");
 }
 
@@ -102,6 +131,7 @@ export function formatRecoveryAction(text: string): RecoveryActionView {
   const progressEvidence = field(cleaned, "Progress evidence");
   const checkpoint = field(cleaned, "Checkpoint");
   const kind = kindFrom(action, explicitKind(cleaned));
+  const status = parseStatus(cleaned);
   const missing = [
     owner ? null : "owner",
     stakeholder ? null : "stakeholder",
@@ -118,6 +148,7 @@ export function formatRecoveryAction(text: string): RecoveryActionView {
     outcome,
     progressEvidence,
     checkpoint,
+    status,
     missing,
   };
 }
@@ -134,6 +165,19 @@ function progressLine(text: string): string {
   return `Evidence that would show progress: ${text}`;
 }
 
+function resolveCurrentStatus(view: RecoveryActionView): ActionCurrentStatus {
+  if (view.status) return view.status;
+  if (view.progressEvidence && readsAsDone(view.progressEvidence) && !/^required, not yet observed/i.test(view.progressEvidence)) {
+    // Progress that already reads as done still becomes "Required, not yet observed" in the note;
+    // status stays Proposed unless Status: was set on the step.
+  }
+  if (/\balready promised\b/i.test(view.action)) return "Promised / Pending";
+  if (/\bwhen they send\b|\bwhen (?:it|the invitation) arrives\b/i.test(view.action)) {
+    return "Conditional";
+  }
+  return "Proposed";
+}
+
 /** Each structured field once. The kind is one label, never a second copy of the fields. */
 export function recoveryActionLines(text: string, now = new Date()): string[] {
   const view = formatRecoveryAction(text);
@@ -141,7 +185,7 @@ export function recoveryActionLines(text: string, now = new Date()): string[] {
   if (view.action) lines.push(view.action);
   const kind = kindLabel(view.kind);
   if (kind) lines.push(kind);
-  lines.push("Current status: Proposed");
+  lines.push(`Current status: ${resolveCurrentStatus(view)}`);
   if (view.owner) lines.push(`Owner: ${view.owner}`);
   if (view.stakeholder) lines.push(`Stakeholder: ${view.stakeholder}`);
   if (view.outcome && view.outcome.toLowerCase() !== view.action.toLowerCase()) {
