@@ -36,6 +36,7 @@ import { commercialBaselineFromText, type CommercialBaseline } from "../src/lib/
 import { attributeQuote } from "../src/lib/evidenceAttribution.js";
 import { assessIntentExtraction, buildIntentRetryInstructions } from "../src/lib/intentExtraction.js";
 import { preserveTriggerEstimate } from "../src/lib/triggerEstimate.js";
+import { isOpenAnalysisMode } from "./relevanceGate.js";
 import {
   assertFrozenConsistency,
   buildDependencyGraph,
@@ -1130,7 +1131,10 @@ export async function analyzeTranscript(
   const stitchedAdded = sectionMarks.length > 1 ? transcript.slice(sectionMarks[1].index ?? 0) : "";
   const supplemental = [stitchedAdded, crmEvidence].filter((part) => part.trim()).join("\n");
   const evidenceCorpus = [transcript, crmEvidence].filter((part) => part.trim()).join("\n\n");
-  let userMessage = buildExtractionMessage(transcript, dealValue, deepContext);
+  const openModePreface = isOpenAnalysisMode()
+    ? `OPEN ANALYSIS MODE (local / exploratory): The evidence may not be a sales deal. Still return the same JSON schema. Map people to stakeholders, friction to blockers, and next steps to remediation. If there is no commercial purchase, classify it as NOT A PURCHASE (or the closest accurate status) and say what kind of situation this is. Do not invent a buyer or a pipeline stage that is not in the evidence.\n\n`
+    : "";
+  let userMessage = `${openModePreface}${buildExtractionMessage(transcript, dealValue, deepContext)}`;
 
   let analysis = await extractWithModels(systemPrompt, userMessage, tier, preferOpenWeights);
   let audit = auditTranscriptGrounding({

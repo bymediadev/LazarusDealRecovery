@@ -3,6 +3,7 @@ dist
 .env
 *.local
 .data
+tmp/
 windows-extra-cas.pem
 npm-install.log
 hubspot.config.yml

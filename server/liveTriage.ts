@@ -78,6 +78,7 @@ export async function runLiveTriage(body: LiveTriageRequest): Promise<LiveTriage
   const relevance = await classifySalesRelevance(transcript, {
     preferOpenWeights: body.preferOpenWeights,
   });
+  // classifySalesRelevance already skips in open analysis (local) mode.
   if (relevance.label === "not_sales") {
     return {
       risk_tier: "LOW",

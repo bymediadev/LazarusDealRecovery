@@ -12,6 +12,18 @@ export interface RelevanceVerdict {
 /** Minimum stitched length before we bother classifying (below this we do not reject). */
 export const RELEVANCE_MIN_CHARS = 120;
 
+/**
+ * Local / exploratory mode: accept any evidence, not only sales deals.
+ * On by default outside production. Set LAZARUS_OPEN_ANALYSIS=0 to re-enable the gate locally,
+ * or LAZARUS_OPEN_ANALYSIS=1 to force it on (including production).
+ */
+export function isOpenAnalysisMode(): boolean {
+  const flag = (process.env.LAZARUS_OPEN_ANALYSIS ?? "").trim().toLowerCase();
+  if (flag === "1" || flag === "true" || flag === "yes" || flag === "on") return true;
+  if (flag === "0" || flag === "false" || flag === "no" || flag === "off") return false;
+  return (process.env.NODE_ENV ?? "").trim() !== "production";
+}
+
 const SAMPLE_CHARS = 12000;
 
 function parseJsonObject(raw: string): Record<string, unknown> {
@@ -48,6 +60,14 @@ export async function classifySalesRelevance(
   opts: { preferOpenWeights?: boolean } = {}
 ): Promise<RelevanceVerdict> {
   const sample = text.trim();
+  if (isOpenAnalysisMode()) {
+    return {
+      label: "sales_deal",
+      reason: "Open analysis mode — sales-only gate skipped; any evidence is accepted.",
+      confidence: "low",
+    };
+  }
+
   if (sample.length < RELEVANCE_MIN_CHARS) {
     return {
       label: "sales_deal",

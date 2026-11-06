@@ -282,25 +282,35 @@ export default function OffHoursFunnel({ active, arrival = "site", onOpenPortal 
     setStage("review");
   };
 
-  const takeFile = async (file: File | undefined) => {
-    if (!file) return;
-    if (file.type.startsWith("audio") || file.type.startsWith("video")) {
+  const takeFiles = async (list: FileList | File[] | null | undefined) => {
+    const files = list ? Array.from(list) : [];
+    if (!files.length) return;
+    if (files.some((file) => file.type.startsWith("audio") || file.type.startsWith("video"))) {
       setError(
         "Paste the transcript. Audio is not sent from here, so names and amounts can be redacted before anything leaves the browser."
       );
       return;
     }
-    const ext = extension(file.name);
-    if (!TEXT_EXT.includes(ext) && !file.type.startsWith("text")) {
-      setError("Use a .txt, .md, or .csv transcript, or paste the text.");
+    const parts: string[] = [];
+    for (const file of files) {
+      const ext = extension(file.name);
+      if (!TEXT_EXT.includes(ext) && !file.type.startsWith("text")) {
+        setError("Use a .txt, .md, or .csv transcript, or paste the text.");
+        return;
+      }
+      if (file.size > 1_000_000) {
+        setError(`"${file.name}" is over 1 MB. Paste the stalled portion.`);
+        return;
+      }
+      const text = (await file.text()).trim();
+      if (!text) continue;
+      parts.push(files.length > 1 ? `--- ${file.name} ---\n\n${text}` : text);
+    }
+    if (!parts.length) {
+      setError("Those files were empty.");
       return;
     }
-    if (file.size > 1_000_000) {
-      setError("That file is over 1 MB. Paste the stalled portion.");
-      return;
-    }
-    const text = (await file.text()).trim();
-    setTranscript(text.slice(0, MAX_CHARS));
+    setTranscript(parts.join("\n\n").slice(0, MAX_CHARS));
     setError(null);
   };
 
@@ -757,13 +767,17 @@ export default function OffHoursFunnel({ active, arrival = "site", onOpenPortal 
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
                 event.preventDefault();
-                void takeFile(event.dataTransfer.files?.[0]);
+                void takeFiles(event.dataTransfer.files);
               }}
             />
             <input
               type="file"
               accept=".txt,.md,.csv,text/plain"
-              onChange={(event) => void takeFile(event.target.files?.[0])}
+              multiple
+              onChange={(event) => {
+                void takeFiles(event.target.files);
+                event.target.value = "";
+              }}
             />
           </label>
           {error && <p className="ohq-error">{error}</p>}

@@ -84,16 +84,16 @@ const PricingGate = lazy(() => import("./components/PricingGate"));
 const PricingPlanCards = lazy(() =>
   import("./components/PricingGate").then((mod) => ({ default: mod.PricingPlanCards }))
 );
-
 const ACCEPTED_EXT = [".mp3", ".wav", ".mp4", ".m4a", ".webm", ".mpeg", ".mpga"];
 const ACCEPT_ATTR = ".mp3,.wav,.mp4,.m4a,.webm,audio/*,video/mp4,video/webm";
 const DOCUMENT_EXT = [".pdf", ".docx"];
 const DOCUMENT_ACCEPT =
   ".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const DOCUMENT_MAX_BYTES = 10 * 1024 * 1024;
-const UNIFIED_UPLOAD_ACCEPT = `${ACCEPT_ATTR},${DOCUMENT_ACCEPT}`;
 const TEXT_ACCEPT = ".txt,.md,.csv,text/plain,text/markdown,text/csv";
 const TEXT_MAX_BYTES = 5 * 1024 * 1024;
+const MAX_DOCUMENT_UPLOADS = 10;
+const UNIFIED_UPLOAD_ACCEPT = `${ACCEPT_ATTR},${DOCUMENT_ACCEPT},${TEXT_ACCEPT}`;
 
 type InputTab = "call" | "email" | "field" | "live";
 
@@ -119,6 +119,15 @@ function isAcceptedDocument(file: File): boolean {
     return true;
   }
   return false;
+}
+
+function isAcceptedText(file: File): boolean {
+  const ext = getExtension(file.name);
+  return [".txt", ".md", ".csv"].includes(ext) || file.type.startsWith("text/");
+}
+
+function fileIdentity(file: File): string {
+  return `${file.name}:${file.size}:${file.lastModified}`;
 }
 
 function formatFileSize(bytes: number): string {
@@ -161,6 +170,7 @@ export default function App() {
   const [accountPortalOpen, setAccountPortalOpen] = useState(false);
   const [dealsPortalOpen, setDealsPortalOpen] = useState(false);
   const [runtimePause, setRuntimePause] = useState<string | null>(null);
+  const [openAnalysis, setOpenAnalysis] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginMode, setLoginMode] = useState<"signin" | "signup">("signin");
   const [route, setRoute] = useState<AppRoute>(() =>
@@ -179,7 +189,7 @@ export default function App() {
   const [linkedHubSpotDealId, setLinkedHubSpotDealId] = useState<string | null>(null);
   const [linkedSalesforceOppId, setLinkedSalesforceOppId] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [documentFile, setDocumentFile] = useState<File | null>(null);
+  const [documentFiles, setDocumentFiles] = useState<File[]>([]);
   const [recordingSource, setRecordingSource] = useState<"upload" | "field" | null>(null);
   const [fieldSessionId, setFieldSessionId] = useState<string | null>(null);
   const [dealValue, setDealValue] = useState("");
@@ -222,7 +232,7 @@ export default function App() {
 
   const hasAudio = !!file;
   const hasUploadedRecording = recordingSource === "upload" && hasAudio;
-  const hasDocument = !!documentFile;
+  const hasDocument = documentFiles.length > 0;
   const hasCallTranscript = callTranscript.trim().length > 0;
   const hasEmail = emailThread.trim().length > 0;
   const hasFieldRecording = recordingSource === "field" && hasAudio;
@@ -265,6 +275,7 @@ export default function App() {
     async (payload: {
       file?: File | null;
       document?: File | null;
+      documents?: File[];
       transcript: string;
       emailThread: string;
       dealValue: string;
@@ -282,6 +293,7 @@ export default function App() {
       const data = await runPostMortem({
         file: payload.file,
         document: payload.document,
+        documents: payload.documents,
         transcript: payload.transcript,
         emailThread: payload.emailThread,
         dealValue: payload.dealValue,
@@ -322,17 +334,22 @@ export default function App() {
           analyses_paused?: boolean;
           pause_message?: string;
           stripe?: boolean;
+          open_analysis?: boolean;
           captcha?: { required?: boolean; site_key?: string | null };
         };
         if (cancelled) return;
         if (data.stripe === false) setStripeConfigured(false);
         else if (data.stripe === true) setStripeConfigured(true);
         setRuntimePause(data.analyses_paused ? data.pause_message || "Analyses are paused." : null);
+        setOpenAnalysis(data.open_analysis === true);
         setCaptchaRequired(data.captcha?.required === true);
         const runtimeKey = (data.captcha?.site_key ?? "").trim();
         if (runtimeKey) setCaptchaSiteKey(runtimeKey);
       } catch {
-        if (!cancelled) setRuntimePause(null);
+        if (!cancelled) {
+          setRuntimePause(null);
+          setOpenAnalysis(import.meta.env.DEV);
+        }
       }
     };
     void load();
@@ -577,9 +594,13 @@ export default function App() {
             file = new File([blob], `field-sync-${entry.id}.webm`, { type: "audio/webm" });
           }
         }
+        const queuedDocs = [
+          ...(entry.documentFiles ?? []),
+          ...(entry.documentFile ? [entry.documentFile] : []),
+        ];
         await runAnalysis({
           file,
-          document: entry.documentFile ?? null,
+          documents: queuedDocs,
           transcript: entry.transcript,
           emailThread: entry.emailThread,
           dealValue: entry.dealValue,
@@ -764,55 +785,105 @@ export default function App() {
     setActiveTab("call");
   }, []);
 
-  const handleDocument = useCallback((f: File | undefined) => {
-    if (!f) return;
-    if (!isAcceptedDocument(f)) {
-      setError("Unsupported document type. Use .pdf or .docx.");
+  const handleDocuments = useCallback((incoming: File[]) => {
+    const docs = incoming.filter(isAcceptedDocument);
+    if (!docs.length) return;
+    const oversized = docs.find((f) => f.size > DOCUMENT_MAX_BYTES);
+    if (oversized) {
+      setError(`Document "${oversized.name}" exceeds 10 MB limit.`);
       setRelevanceBlocked(false);
       return;
     }
-    if (f.size > DOCUMENT_MAX_BYTES) {
-      setError("Document exceeds 10 MB limit.");
-      setRelevanceBlocked(false);
-      return;
-    }
+    setDocumentFiles((previous) => {
+      const next = [...previous];
+      const seen = new Set(previous.map(fileIdentity));
+      let skippedForCap = 0;
+      for (const doc of docs) {
+        const key = fileIdentity(doc);
+        if (seen.has(key)) continue;
+        if (next.length >= MAX_DOCUMENT_UPLOADS) {
+          skippedForCap += 1;
+          continue;
+        }
+        seen.add(key);
+        next.push(doc);
+      }
+      if (skippedForCap) {
+        setWarnings((prev) => [
+          ...prev,
+          `Only ${MAX_DOCUMENT_UPLOADS} documents can attach to one run. ${skippedForCap} extra file${
+            skippedForCap > 1 ? "s were" : " was"
+          } skipped.`,
+        ]);
+      }
+      return next;
+    });
     setError(null);
     setRelevanceBlocked(false);
-    setDocumentFile(f);
     setActiveTab("call");
   }, []);
 
-  const handleEvidenceUpload = useCallback(
-    (f: File | undefined) => {
-      if (!f) return;
-      if (isAcceptedDocument(f)) {
-        handleDocument(f);
-        return;
-      }
-      if (isAcceptedFile(f)) {
-        handleFile(f);
-        return;
-      }
-      setError("Unsupported file. Use .pdf, .docx, .mp3, .wav, .mp4, or .m4a.");
-    },
-    [handleDocument, handleFile]
-  );
-
-  const handleTextEvidence = useCallback(
-    async (f: File | undefined) => {
-      if (!f) return;
-      try {
+  const handleTextEvidenceBatch = useCallback(async (incoming: File[]) => {
+    const texts = incoming.filter(isAcceptedText);
+    if (!texts.length) return;
+    const added: string[] = [];
+    try {
+      for (const f of texts) {
         const text = await readTextEvidence(f);
         const separator = `\n\n--- ${f.name} ---\n\n`;
         setCallTranscript((previous) => (previous.trim() ? `${previous}${separator}${text}` : text));
-        setDemoTranscriptNotice(`Added transcript file: ${f.name}`);
-        setActiveTab("call");
-        setError(null);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Could not read text evidence.");
+        added.push(f.name);
+      }
+      setDemoTranscriptNotice(
+        added.length === 1
+          ? `Added transcript file: ${added[0]}`
+          : `Added ${added.length} transcript files: ${added.join(", ")}`
+      );
+      setActiveTab("call");
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not read text evidence.");
+    }
+  }, []);
+
+  const handleEvidenceUploadBatch = useCallback(
+    (list: FileList | File[] | null | undefined) => {
+      const files = list ? Array.from(list) : [];
+      if (!files.length) return;
+
+      const texts = files.filter(isAcceptedText);
+      const docs = files.filter(isAcceptedDocument);
+      const audios = files.filter(isAcceptedFile);
+      const unsupported = files.filter(
+        (f) => !isAcceptedText(f) && !isAcceptedDocument(f) && !isAcceptedFile(f)
+      );
+
+      if (unsupported.length && !texts.length && !docs.length && !audios.length) {
+        setError("Unsupported file. Use .txt, .md, .csv, .pdf, .docx, .mp3, .wav, .mp4, or .m4a.");
+        setRelevanceBlocked(false);
+        return;
+      }
+
+      if (texts.length) void handleTextEvidenceBatch(texts);
+      if (docs.length) handleDocuments(docs);
+      if (audios.length) {
+        handleFile(audios[0]);
+        if (audios.length > 1) {
+          setDemoTranscriptNotice(
+            `Attached recording ${audios[0].name}. Only one call recording is used per run.`
+          );
+        }
+      }
+      if (unsupported.length && (texts.length || docs.length || audios.length)) {
+        setWarnings((prev) => [
+          ...prev,
+          `Skipped unsupported file${unsupported.length > 1 ? "s" : ""}: ${unsupported
+            .map((f) => f.name)
+            .join(", ")}.`,
+        ]);
       }
     },
-    []
+    [handleDocuments, handleFile, handleTextEvidenceBatch]
   );
 
   const onDragEnter = useCallback((e: React.DragEvent) => {
@@ -839,9 +910,9 @@ export default function App() {
       e.preventDefault();
       e.stopPropagation();
       setDragOver(false);
-      handleEvidenceUpload(e.dataTransfer.files[0]);
+      handleEvidenceUploadBatch(e.dataTransfer.files);
     },
-    [handleEvidenceUpload]
+    [handleEvidenceUploadBatch]
   );
 
   const handleLoadDemoTranscript = async () => {
@@ -946,14 +1017,14 @@ export default function App() {
         transcript: transcriptForRun,
         emailThread: emailForRun,
         recordingFile: recordingSource === "upload" ? file ?? undefined : undefined,
-        documentFile: documentFile ?? undefined,
+        documentFiles: documentFiles.length ? documentFiles : undefined,
         recordingSessionId: fieldSessionId ?? undefined,
       });
       // Clear all input state so the user cannot double-submit and badges reset
       setFile(null);
       setCallTranscript("");
       setEmailThread("");
-      setDocumentFile(null);
+      setDocumentFiles([]);
       setFieldSessionId(null);
       setRecordingSource(null);
       setSyncNotice("Analysis queued — will auto-sync when connection restores.");
@@ -973,7 +1044,7 @@ export default function App() {
     try {
       await runAnalysis({
         file,
-        document: documentFile,
+        documents: documentFiles,
         transcript: transcriptForRun,
         emailThread: emailForRun,
         dealValue,
@@ -1133,7 +1204,7 @@ export default function App() {
       const cycleDaysRaw = parseInt(nextCycleDays, 10);
       const scored = await runAnalysis({
         file,
-        document: documentFile,
+        documents: documentFiles,
         transcript,
         emailThread: emailForRun,
         dealValue,
@@ -1466,7 +1537,10 @@ export default function App() {
         <div className="workspace">
           <section className="panel panel-left intake-viewport">
             <p className="intake-desk-lead">
-              Paste a transcript or drop a file. That is enough to run one deal.
+              Paste a transcript or drop files. That is enough to run one deal.
+              {openAnalysis
+                ? " Open analysis is on locally — any kind of text can run, not only sales deals."
+                : null}
             </p>
             <div className="input-group input-group-grow">
               <div className="input-label-row">
@@ -1477,8 +1551,9 @@ export default function App() {
                     <input
                       type="file"
                       accept={TEXT_ACCEPT}
+                      multiple
                       onChange={(e) => {
-                        void handleTextEvidence(e.target.files?.[0]);
+                        void handleTextEvidenceBatch(e.target.files ? Array.from(e.target.files) : []);
                         e.target.value = "";
                       }}
                     />
@@ -1511,12 +1586,13 @@ export default function App() {
                 className="dropzone-file-input"
                 type="file"
                 accept={UNIFIED_UPLOAD_ACCEPT}
+                multiple
                 onDragEnter={onDragEnter}
                 onDragOver={onDragOver}
                 onDragLeave={onDragLeave}
                 onDrop={onDrop}
                 onChange={(e) => {
-                  handleEvidenceUpload(e.target.files?.[0]);
+                  handleEvidenceUploadBatch(e.target.files);
                   e.target.value = "";
                 }}
               />
@@ -1526,29 +1602,38 @@ export default function App() {
                 </span>
                 <span className="dropzone-text">
                   {hasUploadedRecording || hasDocument
-                    ? "File attached — drop another to add or replace"
-                    : "Or drop a Word doc, PDF, or call recording"}
+                    ? "Files attached — drop more to add"
+                    : "Or drop Word docs, PDFs, transcripts, or a call recording"}
                 </span>
                 <span className="dropzone-hint">
-                  .docx · .pdf · .mp3 · .wav · .mp4 · max 10 MB for documents
+                  Select or drop several at once · .txt · .docx · .pdf · .mp3 · .wav · .mp4 · max 10 MB
+                  each for documents
                 </span>
               </div>
             </div>
             {(hasUploadedRecording || hasDocument) && (
               <ul className="upload-attachment-list" aria-label="Attached files">
-                {hasDocument && documentFile && (
-                  <li>
+                {documentFiles.map((doc) => (
+                  <li key={fileIdentity(doc)}>
                     <div>
                       <strong>Document</strong>
                       <span>
-                        {documentFile.name} · {formatFileSize(documentFile.size)}
+                        {doc.name} · {formatFileSize(doc.size)}
                       </span>
                     </div>
-                    <button type="button" className="file-clear-btn" onClick={() => setDocumentFile(null)}>
+                    <button
+                      type="button"
+                      className="file-clear-btn"
+                      onClick={() =>
+                        setDocumentFiles((previous) =>
+                          previous.filter((item) => fileIdentity(item) !== fileIdentity(doc))
+                        )
+                      }
+                    >
                       Remove
                     </button>
                   </li>
-                )}
+                ))}
                 {hasUploadedRecording && file && (
                   <li>
                     <div>

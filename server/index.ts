@@ -25,7 +25,7 @@ import { stripOutcomeMetadata } from "./sanitize.js";
 import { normalizeEmailThread, normalizeManualTranscript } from "./normalize.js";
 import { scanLiveObjections as scanLiveObjectionsServer } from "./liveObjections.js";
 import { runLiveTriage } from "./liveTriage.js";
-import { classifySalesRelevance } from "./relevanceGate.js";
+import { classifySalesRelevance, isOpenAnalysisMode } from "./relevanceGate.js";
 import { canonicalTrustPackPath, registerTrustPackRoutes, trustPackSlugFromPath } from "./trustPack.js";
 import {
   mapHubSpotDealToDeepContext,
@@ -130,9 +130,10 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
 });
+const MAX_DOCUMENT_UPLOADS = 10;
 const uploadFields = upload.fields([
   { name: "recording", maxCount: 1 },
-  { name: "document", maxCount: 1 },
+  { name: "document", maxCount: MAX_DOCUMENT_UPLOADS },
 ]);
 
 function firstUploadedFile(
@@ -141,6 +142,14 @@ function firstUploadedFile(
 ): Express.Multer.File | undefined {
   if (!files || Array.isArray(files)) return undefined;
   return files[field]?.[0];
+}
+
+function uploadedFiles(
+  files: Express.Multer.File[] | { [fieldname: string]: Express.Multer.File[] } | undefined,
+  field: string
+): Express.Multer.File[] {
+  if (!files || Array.isArray(files)) return [];
+  return files[field] ?? [];
 }
 
 app.use(
@@ -382,7 +391,7 @@ app.post(
     let documentText = "";
 
     const recording = firstUploadedFile(req.files, "recording");
-    const documentFile = firstUploadedFile(req.files, "document");
+    const documentFiles = uploadedFiles(req.files, "document");
 
     if (recording) {
       const transcription = await transcribeAudio(recording.buffer, recording.originalname);
@@ -393,25 +402,35 @@ app.post(
       };
     }
 
-    if (documentFile) {
-      if (documentFile.size > DOCUMENT_MAX_BYTES) {
-        res.status(400).json({
-          error: `Document exceeds ${DOCUMENT_MAX_BYTES / (1024 * 1024)} MB limit.`,
-        });
-        return;
+    if (documentFiles.length) {
+      const parts: string[] = [];
+      for (const documentFile of documentFiles) {
+        if (documentFile.size > DOCUMENT_MAX_BYTES) {
+          res.status(400).json({
+            error: `Document "${documentFile.originalname}" exceeds ${DOCUMENT_MAX_BYTES / (1024 * 1024)} MB limit.`,
+          });
+          return;
+        }
+        try {
+          const extracted = await extractDocumentText(
+            documentFile.buffer,
+            documentFile.originalname,
+            documentFile.mimetype
+          );
+          const body = extracted.text.trim();
+          if (!body) continue;
+          parts.push(
+            documentFiles.length > 1
+              ? `--- ${documentFile.originalname} ---\n\n${body}`
+              : body
+          );
+        } catch (docErr) {
+          const message = docErr instanceof Error ? docErr.message : "Document extraction failed.";
+          res.status(400).json({ error: message });
+          return;
+        }
       }
-      try {
-        const extracted = await extractDocumentText(
-          documentFile.buffer,
-          documentFile.originalname,
-          documentFile.mimetype
-        );
-        documentText = extracted.text;
-      } catch (docErr) {
-        const message = docErr instanceof Error ? docErr.message : "Document extraction failed.";
-        res.status(400).json({ error: message });
-        return;
-      }
+      documentText = parts.join("\n\n");
     }
 
     const { text: rawTranscript, sources } = buildAnalysisTranscript({
@@ -857,6 +876,7 @@ app.get("/api/runtime", async (_req, res) => {
       brand: resolveBrandTokens(),
       captcha: publicCaptchaConfig(),
       stripe: isStripeConfigured(),
+      open_analysis: isOpenAnalysisMode(),
     });
   } catch (err) {
     res.status(500).json({

@@ -75,6 +75,8 @@ export class PostMortemApiError extends Error {
 export interface PostMortemPayload {
   file?: File | null;
   document?: File | null;
+  /** Extra Word/PDF files analyzed with the deal (same FormData field as document). */
+  documents?: File[];
   transcript?: string;
   emailThread?: string;
   dealValue: string;
@@ -103,8 +105,16 @@ export async function runPostMortem(payload: PostMortemPayload): Promise<PostMor
     formData.append("recording", payload.file);
   }
 
-  if (payload.document) {
-    formData.append("document", payload.document);
+  const documents = [
+    ...(payload.document ? [payload.document] : []),
+    ...(payload.documents ?? []),
+  ];
+  const seenDocs = new Set<string>();
+  for (const doc of documents) {
+    const key = `${doc.name}:${doc.size}:${doc.lastModified}`;
+    if (seenDocs.has(key)) continue;
+    seenDocs.add(key);
+    formData.append("document", doc);
   }
 
   const manual = payload.transcript?.trim();
@@ -127,7 +137,8 @@ export async function runPostMortem(payload: PostMortemPayload): Promise<PostMor
     formData.append("field_capture", "1");
   }
 
-  if (payload.forceAnalysis) {
+  // Local Vite always allows non-sales evidence (belt-and-suspenders with server open mode).
+  if (payload.forceAnalysis || import.meta.env.DEV) {
     formData.append("force_analysis", "1");
   }
 

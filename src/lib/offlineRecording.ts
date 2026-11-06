@@ -19,6 +19,7 @@ export interface PendingAnalysis {
   emailThread: string;
   recordingFile?: File;
   documentFile?: File;
+  documentFiles?: File[];
   recordingSessionId?: string;
 }
 
