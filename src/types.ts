@@ -356,6 +356,12 @@ export interface ProprietaryIndices {
   dialogue_stall: DialogueStallSignals;
   stakeholder_dispersion: StakeholderDispersionDetail;
   explanations?: ScoreExplanations;
+  dri_inputs?: {
+    field: string;
+    value: string;
+    basis: "observed_crm" | "transcript" | "inferred_proxy" | "default";
+    reason: string;
+  }[];
 }
 
 export interface StakeholderSignal {
@@ -368,10 +374,12 @@ export interface StakeholderSignal {
   evidence: string;
   evidence_speaker?: string;
   evidence_basis?: "firsthand" | "secondhand" | "unattributed";
+  evidence_source?: "transcript" | "supplemental";
 }
 
 export interface GroundingAudit {
   pass: boolean;
+  grounding_status?: "fully_grounded" | "partially_grounded" | "rejected";
   grounded_force_count: number;
   ungrounded_forces: { factor: string; evidence: string; reason: string }[];
   invented_terms: string[];
@@ -379,6 +387,13 @@ export interface GroundingAudit {
   missing_critical_stakeholders?: string[];
   stakeholders: StakeholderSignal[];
   ungrounded_stakeholders: { name: string; reason: string }[];
+  supplemental_forces?: { factor: string; reason: string }[];
+  rejected_evidence?: {
+    kind: "force" | "stakeholder" | "term" | "amount" | "missing_stakeholder";
+    label: string;
+    detail: string;
+    reason: string;
+  }[];
   warnings: string[];
 }
 
@@ -391,6 +406,7 @@ export interface PostMortemResult {
   executive_summary?: string;
   stakeholders?: StakeholderSignal[];
   grounding_audit?: GroundingAudit;
+  analysis_lineage?: import("./lib/analysisLineage").AnalysisLineage;
   force_initialization?: ForceInitialization;
   causal_forces?: CausalForce[];
   resolution_cycles?: ResolutionCycles;
@@ -696,6 +712,11 @@ export function normalizeResult(raw: PostMortemResult): PostMortemResult {
           effective_intent:
             raw.crm_intelligence.effective_intent ?? raw.crm_intelligence.buyer_intent_strength ?? "",
           equilibrium_state: raw.crm_intelligence.equilibrium_state ?? "metastable",
+          deal_risk_index:
+            raw.proprietary_indices?.deal_risk_index != null
+              ? String(raw.proprietary_indices.deal_risk_index)
+              : raw.crm_intelligence.deal_risk_index,
+          risk_tier: raw.proprietary_indices?.risk_tier ?? raw.crm_intelligence.risk_tier,
         }
       : undefined,
     source_transcript: raw.source_transcript,

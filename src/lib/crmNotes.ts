@@ -5,6 +5,7 @@ import {
   findTechnicalVetoHolder,
   formatAuthorityLabel,
 } from "./authorityRoles";
+import { peopleMapRows } from "./evidenceAttribution";
 import { formatDiagnosticMarkdown, matrixFacing, recommendedMoveLine, unifiedDealHeadline } from "./reportMatrix";
 import { formatMetricLegendMarkdown } from "./metricLegend";
 import { recoveryActionNote, uniqueRecoveryNotes } from "./recoveryPlan";
@@ -38,11 +39,17 @@ function facingFor(result: PostMortemResult) {
 
 function invisibleVetoHolder(result: PostMortemResult): string {
   const stakeholders = result.stakeholders ?? [];
-  const veto = findInvisibleVetoOrMissingAuthority(stakeholders);
-  if (veto) return formatAuthorityLabel(veto);
   const technical = findTechnicalVetoHolder(stakeholders);
-  // Identified technical approval ≠ missing/invisible authority.
-  if (technical) return "Not identified";
+  const veto = findInvisibleVetoOrMissingAuthority(stakeholders);
+  const samePerson =
+    technical &&
+    veto &&
+    technical.name.trim().toLowerCase() === veto.name.trim().toLowerCase();
+  // An identified technical approver is not an unidentified veto.
+  if (technical && (!veto || samePerson)) {
+    return `None. ${formatAuthorityLabel(technical)} is the identified technical approval dependency.`;
+  }
+  if (veto) return formatAuthorityLabel(veto);
   const owner = findEconomicDecisionMaker(stakeholders);
   if (facingFor(result).offForecast) {
     return owner
@@ -70,18 +77,52 @@ function coreBlocker(result: PostMortemResult): string {
   );
 }
 
+function actionBlob(result: PostMortemResult): string {
+  return [
+    ...(result.immediate_remediation ?? []),
+    ...(result.rescue_triage_plan?.immediate_0_30_days ?? []),
+    ...(result.rescue_triage_plan?.near_term_30_90_days ?? []),
+    ...(result.rescue_triage_plan?.long_term_90_plus_days ?? []),
+  ].join("\n");
+}
+
+/** A later meeting or quarter is not the same deadline as a preparation step. */
+function isStatedLaterCheckpoint(action: string): boolean {
+  return /\b(after month-end|until q[1-4]|parked until|next quarter)\b/i.test(action);
+}
+
 function nextActionDate(result: PostMortemResult): string {
   if (facingFor(result).offForecast) {
     return facingFor(result).category === "unresolved"
       ? "No forecast date — speakers are not established"
       : "No forecast date — send what was already promised";
   }
-  const immediate =
-    result.immediate_remediation?.[0] ||
-    result.rescue_triage_plan?.immediate_0_30_days?.[0];
-  if (!immediate) return "Within 7 days";
-  const dateMatch = immediate.match(/\b(20\d{2}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})\b/);
-  return dateMatch ? dateMatch[1] : "Within 7–30 days";
+  const text = actionBlob(result);
+  const dateMatch = text.match(/\b(20\d{2}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})\b/);
+  if (dateMatch) return dateMatch[1];
+  const prep = /\bthis week\b/i.test(text);
+  const later = isStatedLaterCheckpoint(text);
+  if (prep && later) {
+    return "Preparation this week. The meeting checkpoint stays as stated (after month-end or the named quarter). No single deadline was invented.";
+  }
+  if (later) return "Checkpoint is the quarter or month-end stated in the evidence. No calendar date was invented.";
+  if (!text.trim()) return "Within 7 days";
+  return "Within 7–30 days";
+}
+
+function peopleMapEvidenceLine(
+  person: StakeholderSignal,
+  rows: ReturnType<typeof peopleMapRows>
+): string {
+  const row = rows.find((item) => item.name === person.name);
+  if (row?.secondhandNote) {
+    return `  Evidence: not stated (${row.secondhandNote})`;
+  }
+  const quote = row?.quotes[0]?.text?.trim() || person.evidence?.replace(/^"|"$/g, "").trim() || "";
+  if (!quote || /^not stated$/i.test(quote)) return "  Evidence: not stated";
+  const clipped = quote.length > 220 ? `${quote.slice(0, 220)}…` : quote;
+  const note = row?.quotes[0]?.note ? ` (${row.quotes[0].note})` : "";
+  return `  Evidence: "${clipped}"${note}`;
 }
 
 function peopleByRole(result: PostMortemResult): string {
@@ -90,6 +131,8 @@ function peopleByRole(result: PostMortemResult): string {
     return "- No stakeholders mapped — re-run with a fuller transcript.";
   }
 
+  const rows = peopleMapRows(stakeholders);
+  const technical = findTechnicalVetoHolder(stakeholders);
   const groups: { label: string; match: RegExp }[] = [
     {
       label:
@@ -111,16 +154,33 @@ function peopleByRole(result: PostMortemResult): string {
   const lines: string[] = [];
   const used = new Set<string>();
 
+  if (technical) {
+    const full =
+      stakeholders.find((person) => person.name === technical.name) ??
+      ({
+        name: technical.name,
+        role: technical.role ?? "",
+        persona_type: technical.persona_type ?? "Absent Decision Maker",
+        stance: technical.stance ?? "",
+        evidence: technical.evidence ?? "",
+      } as StakeholderSignal);
+    used.add(`${full.name}|${full.role}`);
+    lines.push("**Technical approval dependency:**");
+    lines.push(`- ${formatAuthorityLabel(full)}`);
+    lines.push(peopleMapEvidenceLine(full, rows));
+    lines.push("");
+  }
+
   for (const g of groups) {
-    const people = stakeholders.filter((s) => g.match.test(s.persona_type ?? s.stance ?? ""));
+    const people = stakeholders.filter(
+      (s) => g.match.test(s.persona_type ?? s.stance ?? "") && !used.has(`${s.name}|${s.role}`)
+    );
     if (!people.length) continue;
     lines.push(`**${g.label}:**`);
     for (const p of people) {
       used.add(`${p.name}|${p.role}`);
-      const evidence = p.evidence?.replace(/^"|"$/g, "").trim();
-      lines.push(
-        `- ${stakeholderLabel(p)}${evidence ? `\n  Evidence: "${evidence.slice(0, 220)}${evidence.length > 220 ? "…" : ""}"` : ""}`
-      );
+      lines.push(`- ${stakeholderLabel(p)}`);
+      lines.push(peopleMapEvidenceLine(p, rows));
     }
     lines.push("");
   }
@@ -130,6 +190,7 @@ function peopleByRole(result: PostMortemResult): string {
     lines.push("**Other stakeholders:**");
     for (const p of others) {
       lines.push(`- ${stakeholderLabel(p)}`);
+      lines.push(peopleMapEvidenceLine(p, rows));
     }
     lines.push("");
   }
@@ -146,9 +207,9 @@ function whoDoesWhat(result: PostMortemResult): string {
   const detractor = stakeholders.find((s) =>
     /hidden detractor/i.test(s.persona_type ?? s.stance ?? "")
   );
-  const absent = stakeholders.find((s) =>
-    /absent decision maker/i.test(s.persona_type ?? s.stance ?? "")
-  );
+  const absent =
+    findTechnicalVetoHolder(stakeholders) ??
+    stakeholders.find((s) => /absent decision maker/i.test(s.persona_type ?? s.stance ?? ""));
   const crmNext = result.crm_intelligence?.recommended_next_action?.trim();
   const notADeal = facingFor(result).offForecast;
   const immediate = result.immediate_remediation ?? [];
@@ -180,8 +241,12 @@ function whoDoesWhat(result: PostMortemResult): string {
     );
   }
   if (absent) {
+    const tech = findTechnicalVetoHolder(stakeholders);
+    const isTech = Boolean(tech && tech.name.trim().toLowerCase() === absent.name.trim().toLowerCase());
     lines.push(
-      `- **${absent.name}${absent.role ? ` (${absent.role})` : ""}:** Missing decision-maker — get them in the room or on the thread before treating close date as real.`
+      isTech
+        ? `- **${absent.name}${absent.role ? ` (${absent.role})` : ""}:** Technical approval dependency — schedule validation with them present; do not treat close date as real until they sign off.`
+        : `- **${absent.name}${absent.role ? ` (${absent.role})` : ""}:** Missing decision-maker — get them in the room or on the thread before treating close date as real.`
     );
   }
   if (notADeal) {
@@ -202,10 +267,13 @@ function whatToDo(result: PostMortemResult): string {
     long_term_90_plus_days: [],
   };
 
-  const day0 = immediate.length
-    ? immediate
-    : plan.immediate_0_30_days.slice(0, 2);
-  const day30 = plan.immediate_0_30_days;
+  const day0 = (immediate.length ? immediate : plan.immediate_0_30_days.slice(0, 2)).filter(
+    (action) => !isStatedLaterCheckpoint(action)
+  );
+  const day30 = plan.immediate_0_30_days.filter((action) => !isStatedLaterCheckpoint(action));
+  const laterCheckpoint = [...immediate, ...plan.immediate_0_30_days, ...plan.near_term_30_90_days, ...plan.long_term_90_plus_days].filter(
+    isStatedLaterCheckpoint
+  );
   const mid = Math.ceil(plan.near_term_30_90_days.length / 2);
   const day60 = plan.near_term_30_90_days.slice(0, mid);
   const day90 = [
@@ -241,11 +309,15 @@ function whatToDo(result: PostMortemResult): string {
   section(
     "This week (0–7 days)",
     day0.length ? day0 : day30.slice(0, 2),
-    "Set a dated next step with the champion."
+    laterCheckpoint.length ? undefined : "Set a dated next step with the champion."
   );
-  if (!notADeal) {
+  if (!notADeal && day30.length) {
     sections.push("");
-    section("30 days", day30, day30.length ? undefined : "Hold the weekly recovery motion from this week’s actions.");
+    section("30 days", day30);
+  }
+  if (!notADeal && laterCheckpoint.length) {
+    sections.push("");
+    section("Stated checkpoint", laterCheckpoint);
   }
   if (!notADeal && day60.length) {
     sections.push("");

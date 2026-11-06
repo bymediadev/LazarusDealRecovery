@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { findInvisibleVetoOrMissingAuthority } from "../lib/authorityRoles";
+import { findInvisibleVetoOrMissingAuthority, findTechnicalVetoHolder, formatAuthorityLabel } from "../lib/authorityRoles";
 import { formatCompressedCrmNotes } from "../lib/crmNotes";
 import { PostMortemResult, RescueTriagePlan, StakeholderSignal } from "../types";
 
@@ -41,6 +41,7 @@ function deriveStallPoint(result: PostMortemResult): {
   headline: string;
   collisions: { label: string; evidence: string }[];
   invisibleVeto: StakeholderSignal | null;
+  technicalVeto: StakeholderSignal | null;
 } {
   const init = result.force_initialization;
   const eq = result.equilibrium_analysis;
@@ -49,9 +50,17 @@ function deriveStallPoint(result: PostMortemResult): {
     (f) => f.type === "Constraint" || f.type === "Structural"
   );
 
+  const technicalMatch = findTechnicalVetoHolder(stakeholders);
+  const technicalVeto =
+    technicalMatch == null
+      ? null
+      : stakeholders.find((person) => person.name === technicalMatch.name) ??
+        (technicalMatch as StakeholderSignal);
   const invisibleMatch = findInvisibleVetoOrMissingAuthority(stakeholders);
   const invisibleVeto =
-    invisibleMatch == null
+    invisibleMatch == null ||
+    (technicalVeto &&
+      invisibleMatch.name.trim().toLowerCase() === technicalVeto.name.trim().toLowerCase())
       ? null
       : stakeholders.find((person) => person.name === invisibleMatch.name) ?? null;
 
@@ -77,7 +86,7 @@ function deriveStallPoint(result: PostMortemResult): {
     result.executive_summary?.trim() ||
     "The evidence does not name one blocker yet.";
 
-  return { headline, collisions, invisibleVeto };
+  return { headline, collisions, invisibleVeto, technicalVeto };
 }
 
 function groupedStakeholders(stakeholders: StakeholderSignal[]) {
@@ -115,7 +124,10 @@ export default function ConciseDiagnostic({ result }: Props) {
   const [copiedCrm, setCopiedCrm] = useState(false);
   const stall = deriveStallPoint(result);
   const stakeholders = result.stakeholders ?? [];
-  const personaGroups = groupedStakeholders(stakeholders);
+  const technicalName = stall.technicalVeto?.name.trim().toLowerCase() ?? "";
+  const personaGroups = groupedStakeholders(
+    stakeholders.filter((person) => person.name.trim().toLowerCase() !== technicalName)
+  );
   const plan = result.rescue_triage_plan ?? {
     immediate_0_30_days: [],
     near_term_30_90_days: [],
@@ -272,6 +284,20 @@ export default function ConciseDiagnostic({ result }: Props) {
               ))}
             </ul>
           )}
+          {stall.technicalVeto && (
+            <div className="invisible-veto-callout">
+              <span className="persona-badge persona-badge-absent">TECHNICAL APPROVAL</span>
+              <p>
+                <strong>{formatAuthorityLabel(stall.technicalVeto)}</strong>
+                {stall.technicalVeto.evidence && (
+                  <span className="stall-evidence">
+                    {" "}
+                    — "{stall.technicalVeto.evidence.replace(/^"|"$/g, "")}"
+                  </span>
+                )}
+              </p>
+            </div>
+          )}
           {stall.invisibleVeto && (
             <div className="invisible-veto-callout">
               <span className="persona-badge persona-badge-detractor">INVISIBLE VETO HOLDER</span>
@@ -284,8 +310,22 @@ export default function ConciseDiagnostic({ result }: Props) {
               </p>
             </div>
           )}
-          {personaGroups.length > 0 && (
+          {(stall.technicalVeto || personaGroups.length > 0) && (
             <div className="people-map-grid" style={{ marginTop: "1rem" }}>
+              {stall.technicalVeto && (
+                <div className="people-map-group">
+                  <span className="persona-badge persona-badge-absent">TECHNICAL APPROVAL</span>
+                  <span className="persona-hint">Identified approver. Not an unidentified veto.</span>
+                  <ul className="people-map-names">
+                    <li>
+                      <strong>{stall.technicalVeto.name}</strong>
+                      {stall.technicalVeto.role && (
+                        <span className="people-role"> · {stall.technicalVeto.role}</span>
+                      )}
+                    </li>
+                  </ul>
+                </div>
+              )}
               {personaGroups.map(({ badge, people }) => (
                 <div key={badge.label} className="people-map-group">
                   <span className={`persona-badge ${badge.className}`}>{badge.label}</span>

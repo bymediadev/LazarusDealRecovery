@@ -7,6 +7,12 @@ import {
   type DeepContextInput,
   buildDeepContextMessageBlock,
 } from "./deepContext.js";
+import type {
+  EvidenceSource,
+  GroundingStatus,
+  RejectedEvidence,
+  StakeholderRepair,
+} from "../src/lib/analysisLineage.js";
 
 export interface StakeholderSignal {
   name: string;
@@ -18,10 +24,14 @@ export interface StakeholderSignal {
   evidence: string;
   evidence_speaker?: string;
   evidence_basis?: "firsthand" | "secondhand" | "unattributed";
+  /** transcript = spoken in the call. supplemental = CRM or a later note, not the call. */
+  evidence_source?: EvidenceSource;
 }
 
 export interface GroundingAudit {
   pass: boolean;
+  /** fully_grounded, partially_grounded, or rejected. A failed extraction is never reported as fully grounded. */
+  grounding_status: GroundingStatus;
   grounded_force_count: number;
   ungrounded_forces: { factor: string; evidence: string; reason: string }[];
   invented_terms: string[];
@@ -29,6 +39,9 @@ export interface GroundingAudit {
   missing_critical_stakeholders: string[];
   stakeholders: StakeholderSignal[];
   ungrounded_stakeholders: { name: string; reason: string }[];
+  /** Forces kept because supplemental context supports them. They are not transcript evidence. */
+  supplemental_forces: { factor: string; reason: string }[];
+  rejected_evidence: RejectedEvidence[];
   warnings: string[];
 }
 
@@ -139,21 +152,40 @@ function collectOutputText(
   return [extra, ...forces.map((f) => `${f.factor} ${f.evidence}`)].join(" ");
 }
 
-/** Terms from other deal templates that must not appear unless spoken */
+/**
+ * Terms from other deal templates that must not appear unless they are in the
+ * transcript or in supplemental context. Supplemental support is not transcript support.
+ */
 export function detectInventedTerms(
   forces: { factor: string; evidence: string }[],
   transcript: string,
-  extraOutputText = ""
+  extraOutputText = "",
+  supplemental = ""
 ): string[] {
   const outputBlob = collectOutputText(forces, extraOutputText);
   const invented: string[] = [];
 
   for (const term of TEMPLATE_BLEED_TERMS) {
-    if (termInText(term, outputBlob) && !termInText(term, transcript)) {
+    if (
+      termInText(term, outputBlob) &&
+      !termInText(term, transcript) &&
+      !termInText(term, supplemental)
+    ) {
       invented.push(term);
     }
   }
   return invented;
+}
+
+/** Transcript match wins. A supplemental-only match stays labeled supplemental. */
+export function classifyEvidenceSource(
+  evidence: string,
+  transcript: string,
+  supplemental = ""
+): EvidenceSource | "none" {
+  if (evidenceMatchesTranscript(evidence, transcript)) return "transcript";
+  if (supplemental.trim() && evidenceMatchesTranscript(evidence, supplemental)) return "supplemental";
+  return "none";
 }
 
 /** Dollar amounts in output that never appear in the transcript */
@@ -206,6 +238,10 @@ export function detectMissingCriticalStakeholders(
     !hasStakeholder("dave")
   ) {
     missing.push("Dave (missed demo — detractor)");
+  }
+
+  for (const approver of absentApproversInTranscript(transcript)) {
+    if (!hasStakeholder(approver.name.toLowerCase())) missing.push(approver.name);
   }
 
   return [...new Set(missing)];
@@ -275,6 +311,8 @@ export function auditTranscriptGrounding(input: {
   executive_summary?: string;
   force_initialization?: { summary?: string; classification_rationale?: string };
   stakeholders?: StakeholderSignal[];
+  /** CRM notes or a later meeting. Matches here are supplemental, not transcript evidence. */
+  supplemental?: string;
 }): GroundingAudit {
   const {
     transcript,
@@ -282,8 +320,10 @@ export function auditTranscriptGrounding(input: {
     executive_summary = "",
     force_initialization = {},
     stakeholders = [],
+    supplemental = "",
   } = input;
   const ungrounded_forces: GroundingAudit["ungrounded_forces"] = [];
+  const supplemental_forces: GroundingAudit["supplemental_forces"] = [];
   const warnings: string[] = [];
 
   const extraOutput = [
@@ -293,23 +333,32 @@ export function auditTranscriptGrounding(input: {
   ].join(" ");
 
   for (const force of causal_forces) {
-    if (!evidenceMatchesTranscript(force.evidence, transcript)) {
+    const source = classifyEvidenceSource(force.evidence, transcript, supplemental);
+    if (source === "none") {
       ungrounded_forces.push({
         factor: force.factor,
         evidence: force.evidence,
         reason: "Evidence quote not found in transcript (possible hallucination)",
       });
+    } else if (source === "supplemental") {
+      supplemental_forces.push({
+        factor: force.factor,
+        reason: "Evidence is in supplemental context, not in the transcript.",
+      });
     }
   }
 
-  const invented_terms = detectInventedTerms(causal_forces, transcript, extraOutput);
+  const invented_terms = detectInventedTerms(causal_forces, transcript, extraOutput, supplemental);
   if (invented_terms.length > 0) {
     warnings.push(
       `Template bleed blocked — not in transcript: ${invented_terms.join(", ")}`
     );
   }
 
-  const invented_amounts = detectInventedDollarAmounts(extraOutput, transcript);
+  const invented_amounts = detectInventedDollarAmounts(
+    extraOutput,
+    `${transcript}\n${supplemental}`
+  );
   if (invented_amounts.length > 0) {
     warnings.push(
       `Invented dollar amounts blocked — not in transcript: ${invented_amounts.join(", ")}`
@@ -329,7 +378,8 @@ export function auditTranscriptGrounding(input: {
   const ungrounded_stakeholders: GroundingAudit["ungrounded_stakeholders"] = [];
   for (const s of stakeholders) {
     if (!s.name.trim()) continue;
-    if (!evidenceMatchesTranscript(s.evidence, transcript)) {
+    const source = s.evidence_source ?? classifyEvidenceSource(s.evidence, transcript, supplemental);
+    if (source === "none") {
       ungrounded_stakeholders.push({
         name: s.name,
         reason: "Stakeholder evidence not grounded in transcript",
@@ -346,8 +396,29 @@ export function auditTranscriptGrounding(input: {
     ungrounded_stakeholders.length === 0 &&
     causal_forces.length > 0;
 
+  const grounding_status: GroundingStatus = pass
+    ? "fully_grounded"
+    : grounded_force_count === 0
+      ? "rejected"
+      : "partially_grounded";
+
+  const rejected_evidence = rejectedFromAudit({
+    ungrounded_forces,
+    ungrounded_stakeholders,
+    invented_terms,
+    invented_amounts,
+    missing_critical_stakeholders,
+  });
+
+  if (supplemental_forces.length > 0) {
+    warnings.push(
+      `Supplemental context supports ${supplemental_forces.length} force(s). Those forces are not transcript evidence.`
+    );
+  }
+
   return {
     pass,
+    grounding_status,
     grounded_force_count,
     ungrounded_forces,
     invented_terms,
@@ -355,7 +426,111 @@ export function auditTranscriptGrounding(input: {
     missing_critical_stakeholders,
     stakeholders,
     ungrounded_stakeholders,
+    supplemental_forces,
+    rejected_evidence,
     warnings,
+  };
+}
+
+function rejectedFromAudit(audit: {
+  ungrounded_forces: { factor: string; reason: string }[];
+  ungrounded_stakeholders: { name: string; reason: string }[];
+  invented_terms: string[];
+  invented_amounts: string[];
+  missing_critical_stakeholders: string[];
+}): RejectedEvidence[] {
+  return [
+    ...audit.ungrounded_forces.map((force) => ({
+      kind: "force" as const,
+      label: force.factor,
+      detail: force.reason,
+      reason: "ungrounded_force",
+    })),
+    ...audit.ungrounded_stakeholders.map((person) => ({
+      kind: "stakeholder" as const,
+      label: person.name,
+      detail: person.reason,
+      reason: "ungrounded_stakeholder",
+    })),
+    ...audit.invented_terms.map((term) => ({
+      kind: "term" as const,
+      label: term,
+      detail: "Term is not in the transcript or supplemental context.",
+      reason: "invented_term",
+    })),
+    ...audit.invented_amounts.map((amount) => ({
+      kind: "amount" as const,
+      label: amount,
+      detail: "Amount is not in the transcript or supplemental context.",
+      reason: "invented_amount",
+    })),
+    ...audit.missing_critical_stakeholders.map((name) => ({
+      kind: "missing_stakeholder" as const,
+      label: name,
+      detail: "Named in the transcript but missing from the extraction.",
+      reason: "missing_stakeholder",
+    })),
+  ];
+}
+
+/**
+ * Final audit after filtering. A failed extraction stays failed even when the
+ * remaining forces are safe to score. Removed claims stay on rejected_evidence.
+ */
+export function composeFinalGroundingAudit(
+  prior: GroundingAudit,
+  refreshed: GroundingAudit
+): GroundingAudit {
+  const scoringUnsafe =
+    refreshed.ungrounded_forces.length > 0 ||
+    refreshed.invented_terms.length > 0 ||
+    refreshed.invented_amounts.length > 0 ||
+    refreshed.missing_critical_stakeholders.length > 0 ||
+    refreshed.ungrounded_stakeholders.length > 0 ||
+    refreshed.grounded_force_count === 0;
+
+  const removedSomething = !prior.pass;
+  let grounding_status: GroundingStatus;
+  if (scoringUnsafe && refreshed.grounded_force_count === 0) grounding_status = "rejected";
+  else if (scoringUnsafe || removedSomething) grounding_status = "partially_grounded";
+  else grounding_status = "fully_grounded";
+
+  const warnings = [
+    ...prior.warnings.filter((warning) => !/Missing stakeholder/i.test(warning)),
+    ...refreshed.warnings.filter((warning) => !prior.warnings.includes(warning)),
+  ];
+  if (grounding_status === "partially_grounded") {
+    warnings.push(
+      "Grounding was partial. Ungrounded claims were removed before scoring. This is not a fully grounded extraction."
+    );
+  }
+  if (grounding_status === "rejected") {
+    warnings.push("Grounding rejected the extraction. No safe force remained for scoring.");
+  }
+
+  const rejected_evidence = [
+    ...prior.rejected_evidence,
+    ...refreshed.rejected_evidence.filter(
+      (item) => !prior.rejected_evidence.some((priorItem) => priorItem.kind === item.kind && priorItem.label === item.label)
+    ),
+  ];
+
+  return {
+    ...refreshed,
+    pass: grounding_status === "fully_grounded",
+    grounding_status,
+    ungrounded_forces: prior.ungrounded_forces.length ? prior.ungrounded_forces : refreshed.ungrounded_forces,
+    invented_terms: [...new Set([...prior.invented_terms, ...refreshed.invented_terms])],
+    invented_amounts: [...new Set([...prior.invented_amounts, ...refreshed.invented_amounts])],
+    missing_critical_stakeholders: refreshed.missing_critical_stakeholders,
+    ungrounded_stakeholders: prior.ungrounded_stakeholders.length
+      ? prior.ungrounded_stakeholders
+      : refreshed.ungrounded_stakeholders,
+    rejected_evidence,
+    warnings,
+    stakeholders: refreshed.stakeholders,
+    grounded_force_count: refreshed.grounded_force_count,
+    supplemental_forces: refreshed.supplemental_forces,
   };
 }
 
@@ -365,22 +540,213 @@ export function filterInventedForces<T extends { factor: string; evidence: strin
   transcript: string,
   extraOutputText = ""
 ): T[] {
-  const invented = new Set(
-    detectInventedTerms(forces, transcript, extraOutputText)
-  );
-  return forces.filter((f) => {
-    if (!evidenceMatchesTranscript(f.evidence, transcript)) return false;
-    for (const term of invented) {
-      if (termInText(term, f.factor) || termInText(term, f.evidence)) return false;
-    }
-    return true;
-  });
+  return selectGroundedForces(forces, transcript, "", extraOutputText).kept;
 }
 
-export function scrubInventedSummary(summary: string, transcript: string): string {
+/**
+ * Keep a force only when its evidence is in the transcript or in supplemental context.
+ * Supplemental matches stay tagged and are not treated as transcript quotes.
+ */
+export function selectGroundedForces<T extends { factor: string; evidence: string }>(
+  forces: T[],
+  transcript: string,
+  supplemental = "",
+  extraOutputText = ""
+): {
+  kept: (T & { evidence_source: EvidenceSource })[];
+  rejected: RejectedEvidence[];
+} {
+  const invented = new Set(detectInventedTerms(forces, transcript, extraOutputText, supplemental));
+  const kept: (T & { evidence_source: EvidenceSource })[] = [];
+  const rejected: RejectedEvidence[] = [];
+  for (const force of forces) {
+    const inventedHit = [...invented].find(
+      (term) => termInText(term, force.factor) || termInText(term, force.evidence)
+    );
+    const source = classifyEvidenceSource(force.evidence, transcript, supplemental);
+    if (inventedHit || source === "none") {
+      rejected.push({
+        kind: "force",
+        label: force.factor,
+        detail: inventedHit
+          ? `Force uses "${inventedHit}", which is not in the transcript or supplemental context.`
+          : "Evidence quote not found in the transcript or supplemental context.",
+        reason: inventedHit ? "invented_term" : "ungrounded_force",
+      });
+      continue;
+    }
+    kept.push({ ...force, evidence_source: source });
+  }
+  return { kept, rejected };
+}
+
+/**
+ * Pull a verbatim transcript span that mentions this person.
+ * Never invents text — returns null when no grounded span exists.
+ */
+export function groundedQuoteForPerson(transcript: string, name: string): string | null {
+  const token = name.trim().split(/\s+/)[0];
+  if (!token || token.length < 2) return null;
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const sentenceRe = new RegExp(`[^.\\n]*\\b${escaped}\\b[^.\\n]*[.!]?`, "i");
+  const match = transcript.match(sentenceRe);
+  if (!match) return null;
+  const quote = match[0].replace(/^\[[^\]]+\]\s*/, "").trim();
+  if (quote.length < 10) return null;
+  return evidenceMatchesTranscript(quote, transcript) ? quote : null;
+}
+
+function hasNamedStakeholder(stakeholders: StakeholderSignal[], needle: string): boolean {
+  const n = needle.toLowerCase();
+  return stakeholders.some((s) =>
+    `${s.name} ${s.role} ${s.persona_type} ${s.stance}`.toLowerCase().includes(n)
+  );
+}
+
+export interface AbsentApprover {
+  name: string;
+  role: string;
+  authority_level: "technical_veto" | "unknown";
+  evidence: string;
+}
+
+/**
+ * People the transcript names as absent approvers. Role and authority come from
+ * the same span. A technical sign-off is not recorded as economic authority.
+ */
+export function absentApproversInTranscript(transcript: string): AbsentApprover[] {
+  const found: AbsentApprover[] = [];
+  const seen = new Set<string>();
+
+  const consider = (name: string, roleHint: string) => {
+    const token = name.trim().split(/\s+/)[0] ?? "";
+    if (!isLikelyPersonName(token)) return;
+    const key = token.toLowerCase();
+    if (seen.has(key)) return;
+    const quote = groundedQuoteForPerson(transcript, token);
+    if (!quote) return;
+    const window = transcript.slice(
+      Math.max(0, transcript.toLowerCase().indexOf(token.toLowerCase())),
+      Math.max(0, transcript.toLowerCase().indexOf(token.toLowerCase())) + 220
+    );
+    const absent =
+      /\b(missed|wasn'?t on|was not on|couldn'?t join|could not join|not on the call|underwater until)\b/i.test(
+        `${quote} ${window}`
+      );
+    if (!absent) return;
+    const blob = `${roleHint} ${quote} ${window}`;
+    const technical =
+      /infrastructure|architecture|technical|ot network|vlan|sign(?:s|ed)? off/i.test(blob) &&
+      !/\b(cfo|budget owner|economic buyer)\b/i.test(roleHint);
+    seen.add(key);
+    found.push({
+      name: token,
+      role: roleHint.trim() || (technical ? "Technical approver" : "Approver"),
+      authority_level: technical ? "technical_veto" : "unknown",
+      evidence: quote,
+    });
+  };
+
+  const namedTitle =
+    /\b([A-Z][a-z]{2,}),\s*our\s+((?:VP|Vice President|Director|Chief)[^,.\n]{0,48})/g;
+  let match: RegExpExecArray | null;
+  while ((match = namedTitle.exec(transcript)) !== null) consider(match[1], match[2]);
+
+  const missed =
+    /\b([A-Z][a-z]{2,})\s+(?:missed|wasn't on|was not on|couldn't join|could not join)\b/g;
+  while ((match = missed.exec(transcript)) !== null) consider(match[1], "");
+
+  return found;
+}
+
+export function explainStakeholderGrounding(
+  stakeholders: StakeholderSignal[],
+  transcript: string,
+  supplemental = ""
+): {
+  stakeholders: StakeholderSignal[];
+  rejected: RejectedEvidence[];
+  repairs: StakeholderRepair[];
+} {
+  const repaired: StakeholderSignal[] = [];
+  const rejected: RejectedEvidence[] = [];
+  const repairs: StakeholderRepair[] = [];
+
+  for (const person of stakeholders) {
+    if (!person.name?.trim()) continue;
+    if (evidenceMatchesTranscript(person.evidence ?? "", transcript)) {
+      repaired.push({ ...person, evidence_source: "transcript" });
+      continue;
+    }
+    const quote = groundedQuoteForPerson(transcript, person.name);
+    if (quote) {
+      repaired.push({ ...person, evidence: quote, evidence_source: "transcript" });
+      repairs.push({
+        name: person.name,
+        rule_id: "stakeholder_evidence_replaced",
+        reason: "Stakeholder evidence was not in the transcript. Replaced with a verbatim span that names them.",
+        evidence_source: "transcript",
+      });
+      continue;
+    }
+    if (supplemental.trim() && evidenceMatchesTranscript(person.evidence ?? "", supplemental)) {
+      repaired.push({ ...person, evidence_source: "supplemental" });
+      repairs.push({
+        name: person.name,
+        rule_id: "supplemental_stakeholder_kept",
+        reason: "Stakeholder evidence is in supplemental context and is not treated as a transcript quote.",
+        evidence_source: "supplemental",
+      });
+      continue;
+    }
+    rejected.push({
+      kind: "stakeholder",
+      label: person.name,
+      detail: "Stakeholder evidence was not in the transcript or supplemental context.",
+      reason: "ungrounded_stakeholder",
+    });
+  }
+
+  for (const approver of absentApproversInTranscript(transcript)) {
+    if (hasNamedStakeholder(repaired, approver.name.toLowerCase())) continue;
+    repaired.push({
+      name: approver.name,
+      role: approver.role,
+      stance: "Absent Decision Maker",
+      persona_type: "Absent Decision Maker",
+      authority_level: approver.authority_level,
+      evidence: approver.evidence,
+      evidence_source: "transcript",
+    });
+    repairs.push({
+      name: approver.name,
+      rule_id: "absent_approver_reinjection",
+      reason:
+        "A named absent approver was missing from the extraction. Reinjected from a verbatim transcript span. Technical sign-off is not economic authority.",
+      evidence_source: "transcript",
+    });
+  }
+
+  return { stakeholders: repaired, rejected, repairs };
+}
+
+/**
+ * Keep people named in the transcript after grounding.
+ * Ungrounded evidence is replaced with a verbatim span when possible.
+ * Named absent approvers are reinjected from the transcript when missing.
+ */
+export function ensureGroundedStakeholders(
+  stakeholders: StakeholderSignal[],
+  transcript: string,
+  supplemental = ""
+): StakeholderSignal[] {
+  return explainStakeholderGrounding(stakeholders, transcript, supplemental).stakeholders;
+}
+
+export function scrubInventedSummary(summary: string, transcript: string, supplemental = ""): string {
   let s = summary;
   for (const term of TEMPLATE_BLEED_TERMS) {
-    if (termInText(term, s) && !termInText(term, transcript)) {
+    if (termInText(term, s) && !termInText(term, transcript) && !termInText(term, supplemental)) {
       s = s.replace(new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "");
     }
   }

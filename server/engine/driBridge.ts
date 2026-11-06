@@ -5,6 +5,7 @@
 
 import { calculateDRI, type EngineMatrixDecision, type StakeholderProfile } from "./matrix.js";
 import type { ProspectSentiment, StakeholderRole } from "./config.js";
+import type { DriInputRecord } from "../../src/lib/analysisLineage.js";
 
 export type BridgeFrozen = {
   viability_score: number;
@@ -31,12 +32,25 @@ export type BridgeStall = {
 };
 
 function mapPersonaToRole(s: BridgeStakeholder): StakeholderRole {
-  const raw = `${s.persona_type ?? ""} ${s.stance ?? ""} ${s.role ?? ""}`.toLowerCase();
-  if (/detractor|blocker|oppos/.test(raw)) return "DETRACTOR";
-  if (/economic|buyer|cfo|vp finance|decision maker|budget/.test(raw)) return "ECONOMIC_BUYER";
+  const raw = `${s.persona_type ?? ""} ${s.stance ?? ""} ${s.role ?? ""} ${s.authority_level ?? ""}`.toLowerCase();
+  // Explicit opposition stays a risk role. A technical title does not erase it.
+  if (/detractor|oppos/.test(raw) || /\bblocker\b/.test(raw)) return "DETRACTOR";
+  // Technical approval is not economic signing authority.
+  if (
+    /technical_veto/.test(raw) ||
+    /vp of infrastructure|vice president of infrastructure|technical approver/.test(raw)
+  ) {
+    return "USER";
+  }
+  if (/\babsent\b/.test(raw)) {
+    if (/\b(cfo|economic buyer|budget owner|vp finance)\b/.test(raw)) return "ECONOMIC_BUYER";
+    return "USER";
+  }
+  if (/\b(economic buyer|cfo|vp finance|budget owner)\b/.test(raw) || /\bbuyer\b/.test(raw)) {
+    return "ECONOMIC_BUYER";
+  }
   if (/champion|sponsor|coach/.test(raw)) return "CHAMPION";
   if (/user|evaluator|end.?user/.test(raw)) return "USER";
-  if (/absent/.test(raw)) return "ECONOMIC_BUYER";
   return "USER";
 }
 
@@ -81,7 +95,7 @@ export function telemetryFromAnalysis(
     dealType?: string | null;
     commercialIntentScore?: number | null;
   }
-): EngineMatrixDecision {
+): EngineMatrixDecision & { telemetry_inputs: DriInputRecord[] } {
   const mapped = mapStakeholders(stakeholders);
   const authorityGap = hasAuthorityGap(stakeholders);
   const locked =
@@ -144,17 +158,84 @@ export function telemetryFromAnalysis(
     deltaT = 6;
   }
 
-  return calculateDRI({
-    stage,
-    daysStalled,
-    unansweredEmails: unanswered,
-    sentiment,
-    deltaT,
-    contractValue: opts?.contractValue ?? 0,
-    stakeholders: mapped,
-    dealType: opts?.dealType ?? "NEW_LOGO",
-    commercialIntentScore: opts?.commercialIntentScore ?? 80,
-  });
+  const observedCrm = opts?.daysStalled != null && opts?.unansweredEmails != null;
+  const contractValue = opts?.contractValue ?? 0;
+  const dealType = opts?.dealType ?? "NEW_LOGO";
+  const commercialIntentScore = opts?.commercialIntentScore ?? 80;
+  const telemetry_inputs: DriInputRecord[] = [
+    {
+      field: "stage",
+      value: stage,
+      basis: opts?.stage ? "observed_crm" : "inferred_proxy",
+      reason: opts?.stage
+        ? "Stage was supplied with the deal."
+        : "No CRM stage was supplied. The matrix used a proxy stage for this viability band.",
+    },
+    {
+      field: "days_stalled",
+      value: String(daysStalled),
+      basis: observedCrm ? "observed_crm" : "inferred_proxy",
+      reason: observedCrm
+        ? "Days stalled were supplied as CRM telemetry."
+        : "Days stalled were not observed. This number is a proxy for the viability band, not a CRM measurement.",
+    },
+    {
+      field: "unanswered_emails",
+      value: String(unanswered),
+      basis: observedCrm ? "observed_crm" : "inferred_proxy",
+      reason: observedCrm
+        ? "Unanswered emails were supplied as CRM telemetry."
+        : "Unanswered emails were not observed. This count is a proxy, not a CRM measurement.",
+    },
+    {
+      field: "sentiment",
+      value: sentiment,
+      basis: "inferred_proxy",
+      reason: "Sentiment is inferred from constraint, stall, and viability. It is not an observed CRM sentiment field.",
+    },
+    {
+      field: "delta_t",
+      value: String(deltaT),
+      basis: "inferred_proxy",
+      reason: "Days since the sentiment signal are inferred from the stall score. They are not an observed timestamp.",
+    },
+    {
+      field: "contract_value",
+      value: String(contractValue),
+      basis: opts?.contractValue != null ? "observed_crm" : "default",
+      reason: opts?.contractValue != null ? "Contract value was supplied." : "No contract value was supplied. The matrix used 0.",
+    },
+    {
+      field: "commercial_intent_score",
+      value: String(commercialIntentScore),
+      basis: opts?.commercialIntentScore != null ? "observed_crm" : "default",
+      reason: opts?.commercialIntentScore != null
+        ? "Commercial intent score was supplied."
+        : "No commercial intent score was supplied. The matrix used its default.",
+    },
+    {
+      field: "stakeholder_matrix_roles",
+      value: mapped.map((person) => `${person.name}:${person.role}`).join(", ") || "none",
+      basis: "inferred_proxy",
+      reason:
+        "Persona labels are mapped into the risk matrix. A technical approver is not an economic buyer. This mapping is not observed CRM role data.",
+    },
+  ];
+
+  return {
+    ...calculateDRI({
+      stage,
+      daysStalled,
+      unansweredEmails: unanswered,
+      sentiment,
+      deltaT,
+      contractValue,
+      stakeholders: mapped,
+      dealType,
+      commercialIntentScore,
+    }),
+    telemetry_inputs,
+  };
 }
 
 export function formatDriFormula(decision: EngineMatrixDecision): string {

@@ -1,5 +1,5 @@
 import { uniqueActionSteps } from "./actionSteps";
-import { capacitySubject, samePerson } from "./evidenceAttribution";
+import { attributeQuote, capacitySubject, samePerson } from "./evidenceAttribution";
 import { forecastGuidance } from "./forecastCall";
 import { formatRecoveryAction, uniqueRecoveryNotes } from "./recoveryPlan";
 
@@ -263,6 +263,36 @@ function turnsText(turns: TranscriptTurn[], role: TranscriptTurn["role"]): strin
     .filter((turn) => turn.role === role)
     .map((turn) => turn.text)
     .join("\n");
+}
+
+/** Buyer, seller, or unknown for a quote that appears in a labeled turn. */
+export function quoteSpeakerRole(transcript: string, quote: string): "buyer" | "seller" | "unknown" {
+  const needle = quote.toLowerCase().replace(/\s+/g, " ").trim();
+  if (needle.length < 12) return "unknown";
+  const turn = parseTurns(transcript).turns.find((item) => {
+    const text = item.text.toLowerCase().replace(/\s+/g, " ");
+    return text.includes(needle.slice(0, 48)) || (text.length >= 24 && needle.includes(text.slice(0, 48)));
+  });
+  return turn?.role ?? "unknown";
+}
+
+/**
+ * True when text calls something a buyer requirement and the supporting words
+ * are a seller turn. A condition the buyer actually spoke is not a seller offer.
+ */
+export function sellerOfferLabeledAsBuyerRequirement(transcript: string, text: string): boolean {
+  if (!/\bbuyer (?:requires|required|requirement)\b/i.test(text)) return false;
+  const haystack = text.toLowerCase().replace(/\s+/g, " ");
+  return parseTurns(transcript).turns.some((turn) => {
+    if (turn.role !== "seller") return false;
+    const spoken = turn.text.toLowerCase().replace(/\s+/g, " ").trim();
+    if (spoken.length < 24) return false;
+    const window = Math.min(40, spoken.length);
+    for (let index = 0; index + window <= spoken.length; index += 8) {
+      if (haystack.includes(spoken.slice(index, index + window))) return true;
+    }
+    return false;
+  });
 }
 
 function buyerLines(transcript: string): string {
@@ -1874,17 +1904,35 @@ export function validateReportMatrix(input: {
     )
   );
 
-  const secondhandAsFirsthand = (input.stakeholders ?? []).filter(
-    (person) => person.evidence_basis === "secondhand" && !/^not stated$/i.test(person.evidence ?? "")
-  );
+  const mislabeledSecondhand = (input.stakeholders ?? []).filter((person) => {
+    if (!transcript || !person.name || !person.evidence) return false;
+    if (/^not stated$/i.test(person.evidence)) return false;
+    const attribution = attributeQuote(transcript, person.name, person.evidence);
+    return attribution.basis === "secondhand" && person.evidence_basis !== "secondhand";
+  });
   checks.push(
     withSeverity(
       {
         id: "secondhand_identity",
-        passed: secondhandAsFirsthand.length === 0,
-        detail: secondhandAsFirsthand.length
-          ? `Secondhand evidence still attached as a stance quote for: ${secondhandAsFirsthand.map((p) => p.name).join(", ")}.`
-          : "Secondhand evidence is not treated as the subject's own stance quote.",
+        passed: mislabeledSecondhand.length === 0,
+        detail: mislabeledSecondhand.length
+          ? `Secondhand evidence is unlabeled for: ${mislabeledSecondhand.map((person) => person.name).join(", ")}.`
+          : "Secondhand evidence is labeled as secondhand and is not treated as the subject's own words.",
+      },
+      "WARNING"
+    )
+  );
+  const sellerAsRequirement = (input.proposedActions ?? []).filter((action) =>
+    sellerOfferLabeledAsBuyerRequirement(transcript, action)
+  );
+  checks.push(
+    withSeverity(
+      {
+        id: "seller_offer_not_buyer_requirement",
+        passed: sellerAsRequirement.length === 0,
+        detail: sellerAsRequirement.length
+          ? "A seller offer is labeled as a buyer requirement."
+          : "Seller offers are not labeled as buyer requirements.",
       },
       "WARNING"
     )

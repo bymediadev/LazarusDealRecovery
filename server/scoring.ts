@@ -5,6 +5,7 @@
  *   Layer 3 — Output projection (read-only, no math)
  */
 
+import type { EvidenceSource, ForceTransform } from "../src/lib/analysisLineage.js";
 import { assessIntentExtraction } from "../src/lib/intentExtraction.js";
 import { capacitySubject, samePerson, attributeStatement } from "../src/lib/evidenceAttribution.js";
 import {
@@ -41,6 +42,7 @@ export interface ScoringForce {
   role?: string;
   derived_from?: string[];
   evidence: string;
+  evidence_source?: EvidenceSource;
   score_effect?: {
     dimension: "structural_lock_in" | "constraint_pressure" | "intent_strength" | "enabler_strength" | "none";
     included: boolean;
@@ -224,61 +226,128 @@ function quantizeAddedForce(force: ScoringForce): ScoringForce {
   return { ...force, type: "Structural", weight: 70, role: "independent", derived_from: [] };
 }
 
+function evidenceSourceOf(evidence: string, transcript: string, supplemental: string): EvidenceSource {
+  const quote = evidence.trim();
+  if (quote && transcript.includes(quote)) return "transcript";
+  if (quote && supplemental.includes(quote)) return "supplemental";
+  return "transcript";
+}
+
+function transformFor(
+  ruleId: string,
+  reason: string,
+  source: EvidenceSource,
+  before: ScoringForce[],
+  after: ScoringForce
+): ForceTransform {
+  return {
+    rule_id: ruleId,
+    reason,
+    evidence_source: source,
+    before_factors: before.map((force) => force.factor),
+    after_factor: after.factor,
+    after_type: after.type,
+    after_weight: after.weight,
+  };
+}
+
 /**
  * Same evidence keeps the same viability. The model may relabel a buying
  * condition and drop the score to 0, so that pattern uses fixed inputs.
  * A later call, meeting, or HubSpot/Salesforce note is `supplemental`:
  * phrase hits and the engine's quotes from that text move the score.
  * Calls without that pattern still use the model's forces.
+ * A conditional purchase phrase is not a completed commitment.
  */
-export function lockForcesToTranscript(
+export function explainForceLock(
   transcript: string,
   forces: ScoringForce[],
   supplemental = ""
-): ScoringForce[] {
+): { forces: ScoringForce[]; transforms: ForceTransform[] } {
   const added = supplemental.trim();
   const text = normalizeText(`${transcript}\n${added}`);
   const conditionalPhrase = CONDITIONAL_BUY.find((phrase) => text.includes(phrase));
-  if (!conditionalPhrase) return forces;
-  const commitment = lineContaining(`${transcript}\n${added}`, conditionalPhrase);
+  if (!conditionalPhrase) return { forces, transforms: [] };
+  const bundle = `${transcript}\n${added}`;
+  const commitment = lineContaining(bundle, conditionalPhrase);
+  const commitmentSource = evidenceSourceOf(commitment, transcript, added);
   const soft = SOFT_FRICTION.some((phrase) => text.includes(phrase));
+  const transforms: ForceTransform[] = [];
 
   const locked: ScoringForce[] = [];
   if (soft) {
-    locked.push({
+    const price = {
       factor: "Price is above what the buyer expected",
       type: "Constraint",
       weight: 60,
       role: "independent",
       derived_from: [],
       evidence: lineContaining(transcript, "higher than"),
-    });
+      evidence_source: "transcript" as const,
+    };
+    locked.push(price);
+    transforms.push(
+      transformFor(
+        "soft_price_friction",
+        "A stated price gap sets a fixed constraint. It does not replace the conditional purchase with a close.",
+        "transcript",
+        forces,
+        price
+      )
+    );
   }
-  locked.push({
+  const intent = {
     factor: "Buyer will move forward with a business case",
     type: "Intent",
     weight: 75,
     role: "independent",
     derived_from: [],
     evidence: commitment,
-  });
-  locked.push({
+    evidence_source: commitmentSource,
+  };
+  const path = {
     factor: "Internal path is open if the case is real",
     type: "Enabler",
     weight: 50,
     role: "independent",
     derived_from: [],
     evidence: commitment,
-  });
+    evidence_source: commitmentSource,
+  };
+  locked.push(intent, path);
+  transforms.push(
+    transformFor(
+      "conditional_purchase_lock",
+      `Conditional purchase phrase "${conditionalPhrase}" replaces the extracted force list with a fixed conditional-intent set. This is not a completed purchase.`,
+      commitmentSource,
+      forces,
+      intent
+    )
+  );
 
-  const bundle = `${transcript}\n${added}`;
-  const extras = [
-    addedForce(bundle, text, ADDED_COMMITMENT, "Buyer committed budget or signature", "Enabler", 95),
-    addedForce(bundle, text, ADDED_SETBACK, "New evidence shows the deal losing ground", "Structural", 70),
-    addedForce(bundle, text, HARD_LOCK, "New evidence blocks the purchase", "Constraint", 95),
+  const extras: { force: ScoringForce | null; ruleId: string; reason: string }[] = [
+    {
+      force: addedForce(bundle, text, ADDED_COMMITMENT, "Buyer committed budget or signature", "Enabler", 95),
+      ruleId: "added_commitment_phrase",
+      reason: "A commitment phrase in the evidence adds an enabler. It is recorded separately from the conditional purchase.",
+    },
+    {
+      force: addedForce(bundle, text, ADDED_SETBACK, "New evidence shows the deal losing ground", "Structural", 70),
+      ruleId: "added_setback_phrase",
+      reason: "A setback phrase adds a structural force from the line that contains it.",
+    },
+    {
+      force: addedForce(bundle, text, HARD_LOCK, "New evidence blocks the purchase", "Constraint", 95),
+      ruleId: "added_hard_lock_phrase",
+      reason: "A hard-lock phrase adds a constraint from the line that contains it.",
+    },
   ];
   for (const extra of extras) {
-    if (extra) locked.push(extra);
+    if (!extra.force) continue;
+    const source = evidenceSourceOf(extra.force.evidence, transcript, added);
+    const tagged = { ...extra.force, evidence_source: source };
+    locked.push(tagged);
+    transforms.push(transformFor(extra.ruleId, extra.reason, source, forces, tagged));
   }
 
   const addedText = normalizeText(added);
@@ -289,10 +358,29 @@ export function lockForcesToTranscript(
       const key = normalizeText(force.evidence);
       if (seen.has(key)) continue;
       seen.add(key);
-      locked.push(quantizeAddedForce(force));
+      const quantized = { ...quantizeAddedForce(force), evidence_source: "supplemental" as const };
+      locked.push(quantized);
+      transforms.push(
+        transformFor(
+          "quantize_supplemental_force",
+          "A force whose evidence is only in supplemental context is kept at a fixed weight and labeled supplemental.",
+          "supplemental",
+          [force],
+          quantized
+        )
+      );
     }
   }
-  return locked;
+  return { forces: locked, transforms };
+}
+
+export function lockForcesToTranscript(
+  transcript: string,
+  forces: ScoringForce[],
+  supplemental = ""
+): ScoringForce[] {
+  const traced = explainForceLock(transcript, forces, supplemental);
+  return traced.transforms.length === 0 ? forces : traced.forces;
 }
 
 function maxWeight(forces: ScoringForce[], type: string): number {
@@ -689,14 +777,58 @@ function ensureStatedResource(forces: ScoringForce[], transcript: string): Scori
   ];
 }
 
+function forceIdentity(force: ScoringForce): string {
+  return `${force.factor}|${force.type}|${force.weight}`;
+}
+
 export function deriveCanonicalState(
   rawForces: ScoringForce[],
   blockerClassification = "MIXED",
   transcript = ""
-): { causal: CausalState; frozen: FrozenDerivation } {
+): { causal: CausalState; frozen: FrozenDerivation; transforms: ForceTransform[] } {
   const withIntent = ensureStatedResource(ensureStatedIntent(rawForces, transcript), transcript);
+  const transforms: ForceTransform[] = [];
+  for (const force of withIntent) {
+    if (rawForces.some((prior) => prior.factor === force.factor && prior.evidence === force.evidence)) continue;
+    const resource = STATED_RESOURCE.test(`${force.factor} ${force.evidence}`);
+    transforms.push({
+      rule_id: resource ? "stated_resource_backfill" : "stated_intent_backfill",
+      reason: resource
+        ? "A stated capacity limit was missing from the extraction, so a constraint force was added from that sentence."
+        : "Stated willingness was missing from the extraction, so an Intent force was added from that sentence.",
+      evidence_source: "transcript",
+      before_factors: rawForces.map((prior) => prior.factor),
+      after_factor: force.factor,
+      after_type: force.type,
+      after_weight: force.weight,
+    });
+  }
   const blocker = resolveBlockerClassification(blockerClassification, withIntent, transcript);
+  if (blocker !== blockerClassification) {
+    transforms.push({
+      rule_id: "temporary_calendar_blocker",
+      reason: `Blocker classification changed from "${blockerClassification}" to "${blocker}" because the evidence describes a missed meeting rather than a system lock.`,
+      evidence_source: "transcript",
+      before_factors: [blockerClassification],
+      after_factor: blocker,
+      after_type: "blocker",
+      after_weight: 0,
+    });
+  }
   const merged = mergeForces(withIntent);
+  const beforeMerge = withIntent.map(forceIdentity).sort().join("||");
+  const afterMerge = merged.map(forceIdentity).sort().join("||");
+  if (beforeMerge !== afterMerge) {
+    transforms.push({
+      rule_id: "force_merge",
+      reason: "Overlapping structural or constraint forces were merged. Weights were not summed.",
+      evidence_source: "extraction",
+      before_factors: withIntent.map((force) => force.factor),
+      after_factor: merged.map((force) => force.factor).join(" | "),
+      after_type: "mixed",
+      after_weight: 0,
+    });
+  }
   const mapped = mapForcesToScores(merged);
   const forces = mapped.forces.map((force, index) => ({
     ...force,
@@ -825,7 +957,7 @@ export function deriveCanonicalState(
     },
   };
 
-  return { causal, frozen };
+  return { causal, frozen, transforms };
 }
 
 export function buildDependencyGraph(forces: ScoringForce[]) {
@@ -972,6 +1104,13 @@ export interface ProprietaryIndices {
   dialogue_stall: DialogueStallSignals;
   stakeholder_dispersion: StakeholderDispersion;
   explanations: ScoreExplanations;
+  /** Each DRI input and whether it was observed CRM data, transcript text, an inferred proxy, or a default. */
+  dri_inputs?: {
+    field: string;
+    value: string;
+    basis: "observed_crm" | "transcript" | "inferred_proxy" | "default";
+    reason: string;
+  }[];
 }
 
 /** Persona contributions to dispersion. Positive weights are capped per person (see MAX_PERSONA_SIGNAL). */
@@ -1399,6 +1538,12 @@ export function compileDealRiskReport(
     gammaStakeholder: number;
     zStall: number;
   };
+  dri_inputs: {
+    field: string;
+    value: string;
+    basis: "observed_crm" | "transcript" | "inferred_proxy" | "default";
+    reason: string;
+  }[];
 } {
   const stallSignals: DialogueStallSignals = stall ?? {
     score: stallScore,
@@ -1418,6 +1563,7 @@ export function compileDealRiskReport(
     timingPenalty: 0,
     stallContribution: stallScore,
     breakdown: decision.breakdown,
+    dri_inputs: decision.telemetry_inputs,
   };
 }
 
@@ -1546,7 +1692,18 @@ export function explainScores(
         },
         {
           basis: "inferred",
-          text: "Telemetry is drawn from timing, constraint pressure, stall patterns, and the mapped stakeholder list. Force Interaction supplies evidence; the risk matrix writes the score.",
+          text: "Telemetry is drawn from timing, constraint pressure, stall patterns, and the mapped stakeholder list. Force Interaction supplies evidence; the risk matrix writes the score. Viability and Deal Risk are separate metrics.",
+        },
+        {
+          basis: "inferred",
+          text: (() => {
+            const inputs = telemetryFromAnalysis(frozen, stakeholders, stall).telemetry_inputs;
+            const proxies = inputs.filter((item) => item.basis === "inferred_proxy" || item.basis === "default");
+            if (!proxies.length) return "Stage days and unanswered touches were supplied as observed CRM telemetry.";
+            return `These Deal Risk inputs are not observed CRM telemetry: ${proxies
+              .map((item) => `${item.field}=${item.value} (${item.basis === "default" ? "default" : "inferred"})`)
+              .join("; ")}.`;
+          })(),
         },
       ],
       caveat:
@@ -1626,7 +1783,7 @@ export function deriveProprietaryIndices(
 ): ProprietaryIndices {
   const stakeholder_dispersion = computeStakeholderDispersion(stakeholders, transcript);
   const dialogue_stall = computeDialogueStallSignals(transcript);
-  const { deal_risk_index, formula: equation } = compileDealRiskReport(
+  const { deal_risk_index, formula: equation, dri_inputs } = compileDealRiskReport(
     frozen,
     stakeholder_dispersion.index,
     dialogue_stall.score,
@@ -1656,6 +1813,7 @@ export function deriveProprietaryIndices(
       blocker,
       stakeholders
     ),
+    dri_inputs,
   };
 }
 

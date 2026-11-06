@@ -286,8 +286,12 @@ export default function AnalysisReport({
       {r.grounding_audit && !r.grounding_audit.pass && (
         <div className="warning-banner" style={{ marginBottom: "1rem" }}>
           <p>
-            <strong>Transcript grounding:</strong> Some claims could not be verified against the call
-            text and were removed or corrected.
+            <strong>Transcript grounding:</strong>{" "}
+            {r.grounding_audit.grounding_status === "rejected"
+              ? "Grounding rejected unverified claims. Scores are not based on those claims."
+              : r.grounding_audit.grounding_status === "partially_grounded"
+                ? "Part of the extraction was not in the call. Ungrounded claims were removed before scoring. The diagnosis uses the grounded remainder, and this is not a fully grounded extraction."
+                : "Some claims could not be verified against the call text and were removed or corrected."}
             {r.grounding_audit.invented_terms.length > 0 &&
               ` Template bleed blocked: ${r.grounding_audit.invented_terms.join(", ")}.`}
           </p>
@@ -810,10 +814,10 @@ export default function AnalysisReport({
             <CrmField label="Effective Intent" value={r.crm_intelligence.effective_intent} />
             <CrmField label="Constraint Pressure" value={r.crm_intelligence.constraint_pressure} />
             {!facing.offForecast && (
-              <CrmField label="Deal Risk Index (Derived)" value={r.crm_intelligence.deal_risk_index ?? String(pi?.deal_risk_index ?? "")} />
+              <CrmField label="Deal Risk Index (Derived)" value={pi?.deal_risk_index != null ? String(pi.deal_risk_index) : (r.crm_intelligence.deal_risk_index ?? "")} />
             )}
             {!facing.offForecast && (
-              <CrmField label="Risk Tier" value={r.crm_intelligence.risk_tier ?? pi?.risk_tier} />
+              <CrmField label="Risk Tier" value={pi?.risk_tier ?? r.crm_intelligence.risk_tier} />
             )}
             <CrmField
               label="Recommended Next Action"

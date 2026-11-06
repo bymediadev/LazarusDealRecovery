@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { findTechnicalVetoHolder, formatAuthorityLabel } from "../lib/authorityRoles";
 import { recoveryActionLines } from "../lib/recoveryPlan";
 import { canonicalImmediateActions, unifiedDealHeadline } from "../lib/reportMatrix";
 import { formatCompressedCrmNotes } from "../lib/crmNotes";
@@ -63,7 +64,11 @@ export default function FastFactsPanel({
   const [pushError, setPushError] = useState<string | null>(null);
 
   const status = result.deal_classification?.status ?? "UNKNOWN";
-  const absent = absentPeople(result)[0];
+  const technical = findTechnicalVetoHolder(result.stakeholders ?? []);
+  const technicalName = technical?.name.trim().toLowerCase() ?? "";
+  const absent = absentPeople(result).find(
+    (person) => person.name.trim().toLowerCase() !== technicalName
+  );
   const veto = opposing(result)[0];
   const headline = unifiedDealHeadline({
     status,
@@ -71,7 +76,7 @@ export default function FastFactsPanel({
     recoverabilityStatus: result.recoverability?.status,
     relevanceLabel: result.relevance?.label,
     transcript: result.source_transcript,
-    blockedOn: absent?.name ?? veto?.name ?? null,
+    blockedOn: technical?.name ?? absent?.name ?? veto?.name ?? null,
     viabilityState: result.viability_state?.state,
     recoverabilityScore: result.recoverability_score ?? result.viability_state?.viability_score,
     riskTier: result.proprietary_indices?.risk_tier,
@@ -79,7 +84,9 @@ export default function FastFactsPanel({
   const facing = headline.facing;
   const blocker = coreBlocker(result);
   const vetoPeople = opposing(result);
-  const missingPeople = absentPeople(result);
+  const missingPeople = absentPeople(result).filter(
+    (person) => person.name.trim().toLowerCase() !== technicalName
+  );
   const conditionStakeholders = conditionPeople(result);
   const saveSteps =
     facing.offForecast
@@ -138,7 +145,7 @@ export default function FastFactsPanel({
       <article className="card card-neutral concise-card fast-facts-card">
         <h2 className="card-title">People and constraints</h2>
         <div className="card-body">
-          {vetoPeople.length === 0 && missingPeople.length === 0 && conditionStakeholders.length === 0 ? (
+          {vetoPeople.length === 0 && missingPeople.length === 0 && conditionStakeholders.length === 0 && !technical ? (
             <p>
               {(result.stakeholders ?? []).some((person) =>
                 /economic owner/i.test(`${person.persona_type ?? ""} ${person.stance ?? ""}`)
@@ -170,6 +177,12 @@ export default function FastFactsPanel({
                   . This is a condition or a limit, not recorded opposition.
                 </li>
               ))}
+              {technical && (
+                <li key="technical-veto">
+                  <strong>{formatAuthorityLabel(technical)}</strong>
+                  {". Technical approval is identified. This is not an unidentified veto."}
+                </li>
+              )}
               {missingPeople.map((p, i) => (
                 <li key={`absent-${i}`}>
                   <strong>

@@ -13,12 +13,21 @@ import {
   auditTranscriptGrounding,
   buildGroundingRetryMessage,
   buildTranscriptConstraints,
-  evidenceMatchesTranscript,
-  filterInventedForces,
+  composeFinalGroundingAudit,
+  explainStakeholderGrounding,
   scrubInventedSummary,
+  selectGroundedForces,
   type GroundingAudit,
   type StakeholderSignal,
 } from "./grounding.js";
+import {
+  freezeLineage,
+  type AnalysisLineage,
+  type ForceSnapshot,
+  type ForceTransform,
+  type RejectedEvidence,
+  type StakeholderRepair,
+} from "../src/lib/analysisLineage.js";
 import { alignBlockerNarrative } from "../src/lib/blockerNarrative.js";
 import {
   diagnosticProfile,
@@ -43,7 +52,7 @@ import {
   buildDependencyGraph,
   dedupeCouplings,
   deriveCanonicalState,
-  lockForcesToTranscript,
+  explainForceLock,
   deriveProprietaryIndices,
   isSellerIntroduction,
   reconcilePersona,
@@ -98,6 +107,7 @@ export interface CausalForce {
   role: ForceRole;
   derived_from: string[];
   evidence: string;
+  evidence_source?: "transcript" | "supplemental";
   score_effect?: {
     dimension: string;
     included: boolean;
@@ -173,6 +183,7 @@ export interface ViabilityModel {
     constraint_pressure: number;
     structural_lock_in_impact: number;
     timing_accessibility: number;
+    enabler_strength: number;
   };
 }
 
@@ -260,6 +271,9 @@ export interface EnterpriseAnalysis {
   report_validation?: ReportValidation;
   diagnostic_profile?: ReturnType<typeof diagnosticProfile>;
   /** Reproducibility metadata — no transcript text. */
+  analysis_lineage?: AnalysisLineage;
+  /** Carried only until the lineage record is sealed. Not part of the public diagnosis. */
+  force_transforms?: ForceTransform[];
   diagnostic_run?: {
     scoring_engine_version: string;
     extraction_schema_version: string;
@@ -371,11 +385,13 @@ function applyCanonicalScoring(
     role: f.role,
     derived_from: f.derived_from,
     evidence: f.evidence,
+    evidence_source: f.evidence_source,
   }));
-  const scoringForces = lockForcesToTranscript(transcript, rawForces, supplemental);
-  const scoringLocked = scoringForces !== rawForces;
+  const locked = explainForceLock(transcript, rawForces, supplemental);
+  const scoringForces = locked.forces;
+  const scoringLocked = locked.transforms.length > 0;
 
-  const { causal, frozen } = deriveCanonicalState(
+  const { causal, frozen, transforms: derivationTransforms } = deriveCanonicalState(
     scoringForces,
     scoringLocked ? "MIXED" : result.force_initialization.blocker_classification,
     transcript
@@ -476,6 +492,7 @@ function applyCanonicalScoring(
         }
       : result.live_deal_triage,
     report_validation,
+    force_transforms: [...locked.transforms, ...derivationTransforms],
     diagnostic_run: buildDiagnosticRunMetadata(),
     force_initialization: quiet
       ? {
@@ -507,6 +524,7 @@ function applyCanonicalScoring(
       role: (f.role ?? "independent") as ForceRole,
       derived_from: f.derived_from ?? [],
       evidence: f.evidence,
+      evidence_source: f.evidence_source,
       score_effect: f.score_effect,
     })),
     resolution_cycles: frozen.resolution_cycles,
@@ -905,6 +923,7 @@ function normalizeOutput(raw: Record<string, unknown>): EnterpriseAnalysis {
         constraint_pressure: 0,
         structural_lock_in_impact: 0,
         timing_accessibility: 0,
+        enabler_strength: 0,
       },
     },
     deal_trajectory: {
@@ -1077,44 +1096,44 @@ async function extractWithModels(
 function applyGroundingFilter(
   analysis: EnterpriseAnalysis,
   transcript: string,
-  evidenceCorpus: string,
   supplemental = ""
-): EnterpriseAnalysis {
+): { analysis: EnterpriseAnalysis; rejected: RejectedEvidence[]; repairs: StakeholderRepair[] } {
   const extraOutput = [
     analysis.executive_summary,
     analysis.force_initialization.summary,
     analysis.force_initialization.classification_rationale,
   ].join(" ");
 
-  const corpus = evidenceCorpus.trim() || transcript;
-  const groundedForces = filterInventedForces(
-    analysis.causal_forces,
-    corpus,
-    extraOutput
-  );
-  const groundedStakeholders = analysis.stakeholders.filter((s) =>
-    evidenceMatchesTranscript(s.evidence, corpus)
-  );
+  const selected = selectGroundedForces(analysis.causal_forces, transcript, supplemental, extraOutput);
+  const people = explainStakeholderGrounding(analysis.stakeholders, transcript, supplemental);
 
-  if (groundedForces.length === 0) {
+  if (selected.kept.length === 0) {
     throw new Error(
       "No causal forces could be grounded in the transcript. Check that the transcript contains dialogue, not just notes."
     );
   }
 
-  return applyCanonicalScoring({
+  const scored = applyCanonicalScoring({
     ...analysis,
-    executive_summary: scrubInventedSummary(analysis.executive_summary, corpus),
+    executive_summary: scrubInventedSummary(analysis.executive_summary, transcript, supplemental),
     force_initialization: {
       ...analysis.force_initialization,
-      summary: scrubInventedSummary(analysis.force_initialization.summary, corpus),
+      summary: scrubInventedSummary(analysis.force_initialization.summary, transcript, supplemental),
       classification_rationale: scrubInventedSummary(
         analysis.force_initialization.classification_rationale,
-        corpus
+        transcript,
+        supplemental
       ),
     },
-    causal_forces: groundedForces,
-    stakeholders: groundedStakeholders.map((person) => {
+    causal_forces: selected.kept,
+    stakeholders: people.stakeholders.map((person) => {
+      if (person.evidence_source === "supplemental") {
+        return {
+          ...person,
+          evidence_speaker: "",
+          evidence_basis: "unattributed" as const,
+        };
+      }
       const attribution = attributeQuote(transcript, person.name, person.evidence);
       return {
         ...person,
@@ -1123,6 +1142,28 @@ function applyGroundingFilter(
       };
     }),
   }, transcript, supplemental);
+
+  return {
+    analysis: scored,
+    rejected: [...selected.rejected, ...people.rejected],
+    repairs: people.repairs,
+  };
+}
+
+function forceSnapshot(force: {
+  factor: string;
+  type: string;
+  weight: number;
+  evidence_source?: "transcript" | "supplemental";
+  score_effect?: { included?: boolean };
+}): ForceSnapshot {
+  return {
+    factor: force.factor,
+    type: force.type,
+    weight: force.weight,
+    evidence_source: force.evidence_source ?? "unknown",
+    counted: force.score_effect?.included ?? null,
+  };
 }
 
 export async function analyzeTranscript(
@@ -1149,38 +1190,37 @@ export async function analyzeTranscript(
   const sectionMarks = [...transcript.matchAll(/^=== .+ ===$/gm)];
   const stitchedAdded = sectionMarks.length > 1 ? transcript.slice(sectionMarks[1].index ?? 0) : "";
   const supplemental = [stitchedAdded, crmEvidence].filter((part) => part.trim()).join("\n");
-  const evidenceCorpus = [transcript, crmEvidence].filter((part) => part.trim()).join("\n\n");
   const openModePreface = isOpenAnalysisMode()
     ? `OPEN ANALYSIS MODE (local / exploratory): The evidence may not be a sales deal. Still return the same JSON schema. Map people to stakeholders, friction to blockers, and next steps to remediation. If there is no commercial purchase, classify it as NOT A PURCHASE (or the closest accurate status) and say what kind of situation this is. Do not invent a buyer or a pipeline stage that is not in the evidence.\n\n`
     : "";
   let userMessage = `${openModePreface}${buildExtractionMessage(transcript, dealValue, deepContext)}`;
 
+  let extractionRetried = false;
+  const auditInput = (current: EnterpriseAnalysis) =>
+    auditTranscriptGrounding({
+      transcript,
+      supplemental,
+      dealValue,
+      causal_forces: current.causal_forces,
+      executive_summary: current.executive_summary,
+      force_initialization: current.force_initialization,
+      stakeholders: current.stakeholders,
+    });
+
   let analysis = await extractWithModels(systemPrompt, userMessage, tier, preferOpenWeights);
-  let audit = auditTranscriptGrounding({
-    transcript: evidenceCorpus,
-    dealValue,
-    causal_forces: analysis.causal_forces,
-    executive_summary: analysis.executive_summary,
-    force_initialization: analysis.force_initialization,
-    stakeholders: analysis.stakeholders,
-  });
+  let audit = auditInput(analysis);
 
   if (!audit.pass) {
+    extractionRetried = true;
     console.warn("Grounding audit failed — retrying with correction prompt", audit);
     userMessage = buildGroundingRetryMessage(transcript, dealValue, audit, deepContext);
     analysis = await extractWithModels(systemPrompt, userMessage, tier, preferOpenWeights);
-    audit = auditTranscriptGrounding({
-      transcript: evidenceCorpus,
-      dealValue,
-      causal_forces: analysis.causal_forces,
-      executive_summary: analysis.executive_summary,
-      force_initialization: analysis.force_initialization,
-      stakeholders: analysis.stakeholders,
-    });
+    audit = auditInput(analysis);
   }
 
   const intentAssessment = assessIntentExtraction(transcript, analysis.causal_forces);
   if (intentAssessment.status === "missing_despite_signals") {
+    extractionRetried = true;
     console.warn("Intent extraction omitted stated buyer willingness — retrying once");
     userMessage = `${buildTranscriptConstraints(transcript, dealValue)}${buildDeepContextMessageBlock(deepContext ?? {})}
 
@@ -1189,27 +1229,66 @@ ${buildIntentRetryInstructions(intentAssessment.missing)}
 TRANSCRIPT:
 ${transcript}`;
     analysis = await extractWithModels(systemPrompt, userMessage, tier, preferOpenWeights);
-    audit = auditTranscriptGrounding({
-      transcript: evidenceCorpus,
-      dealValue,
-      causal_forces: analysis.causal_forces,
-      executive_summary: analysis.executive_summary,
-      force_initialization: analysis.force_initialization,
-      stakeholders: analysis.stakeholders,
-    });
+    audit = auditInput(analysis);
   }
 
   if (!audit.pass) {
     console.warn("Grounding still failed after retry — filtering invented content", audit);
-    analysis = applyGroundingFilter(analysis, transcript, evidenceCorpus, supplemental);
-    audit.warnings.push("Invented or ungrounded content was removed — scores derived from transcript-only forces.");
-  } else {
-    analysis = applyGroundingFilter(analysis, transcript, evidenceCorpus, supplemental);
   }
+
+  const originalForces = analysis.causal_forces.map((force) => forceSnapshot(force));
+  const originalNames = analysis.stakeholders.map((person) => person.name);
+  const grounded = applyGroundingFilter(analysis, transcript, supplemental);
+  analysis = grounded.analysis;
+  const refreshed = auditInput(analysis);
+  audit = composeFinalGroundingAudit(audit, refreshed);
+  for (const item of grounded.rejected) {
+    if (!audit.rejected_evidence.some((prior) => prior.kind === item.kind && prior.label === item.label)) {
+      audit.rejected_evidence.push(item);
+    }
+  }
+
+  const transforms = analysis.force_transforms ?? [];
+  delete analysis.force_transforms;
+  const lineage = freezeLineage({
+    grounding_status: audit.grounding_status,
+    extraction_retried: extractionRetried,
+    original_extraction: { forces: originalForces, stakeholder_names: originalNames },
+    grounded_extraction: {
+      forces: analysis.causal_forces.map((force) => forceSnapshot(force)),
+      stakeholder_names: analysis.stakeholders.map((person) => person.name),
+    },
+    rejected_evidence: audit.rejected_evidence,
+    stakeholder_repairs: grounded.repairs,
+    scoring_forces: analysis.causal_forces.map((force) => forceSnapshot(force)),
+    force_transforms: transforms,
+    scoring: {
+      intent_strength: analysis.buyer_state.intent_strength,
+      constraint_pressure: analysis.buyer_state.constraint_pressure,
+      structural_lock_in: analysis.viability_state.derivation_components.structural_lock_in_impact,
+      enabler_strength: analysis.viability_state.derivation_components.enabler_strength,
+      timing_factor: analysis.viability_state.derivation_components.timing_accessibility,
+      effective_intent: analysis.buyer_state.effective_intent,
+      viability_score: analysis.viability_state.viability_score,
+      trajectory_type: analysis.deal_trajectory.trajectory_type,
+      recoverability: analysis.recoverability?.status ?? "",
+      blocker_classification: analysis.force_initialization.blocker_classification,
+    },
+    dri_inputs: analysis.proprietary_indices?.dri_inputs ?? [],
+    dri: analysis.proprietary_indices?.deal_risk_index ?? 0,
+    report: {
+      status: analysis.deal_classification.status,
+      viability_score: analysis.viability_state.viability_score,
+      trajectory_type: analysis.deal_trajectory.trajectory_type,
+      recoverability: analysis.recoverability?.status ?? "",
+      deal_risk_index: analysis.proprietary_indices?.deal_risk_index ?? 0,
+    },
+  });
 
   return {
     ...toApiResponse(analysis),
     grounding_audit: audit,
+    analysis_lineage: lineage,
   };
 }
 

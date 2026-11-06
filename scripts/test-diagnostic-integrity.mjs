@@ -6,19 +6,26 @@ import { readFileSync } from "fs";
 import {
   deriveCanonicalState,
   deriveProprietaryIndices,
+  explainForceLock,
   reconcilePersona,
 } from "../server/scoring.ts";
 import { assertAnalysisSchema, statusFromTrajectory } from "../server/gemini.ts";
+import { normalizeResult } from "../src/types.ts";
 import {
   classifyRecoverability,
   classifyRisk,
+  diagnosticProfile,
   forceDuration,
   isNotAPurchase,
   mapForcesToScores,
+  parseTurns,
+  purchaseMotion,
+  quoteSpeakerRole,
+  sellerOfferLabeledAsBuyerRequirement,
   unifiedDealHeadline,
   validateReportMatrix,
 } from "../src/lib/reportMatrix.ts";
-import { attributeQuote, peopleMapRows } from "../src/lib/evidenceAttribution.ts";
+import { attributeQuote, peopleMapRows, samePerson } from "../src/lib/evidenceAttribution.ts";
 import {
   computeEffectiveIntent,
   SCORING_ENGINE_VERSION,
@@ -343,9 +350,48 @@ const crm = formatCompressedCrmNotes({
   source_transcript: transcript,
 });
 check(
-  "CRM invisible veto is not identified when only technical veto exists",
-  /Invisible veto \/ missing authority:\*\* Not identified/i.test(crm),
+  "CRM names Dave as the technical veto and does not call him unidentified",
+  /Invisible veto \/ missing authority:\*\* None\. Dave \(VP of Infrastructure\) — technical approval dependency is the identified technical approval dependency\./i.test(
+    crm
+  ) &&
+    /Technical approval dependency:\*\*\s*\n- Dave \(VP of Infrastructure\)/i.test(crm) &&
+    !/Invisible veto \/ missing authority:\*\* Not identified/i.test(crm),
   crm.match(/Invisible veto[^\n]*/)?.[0]
+);
+check(
+  "CRM deal risk is the scored index, not the scale denominator",
+  /\*\*Deal Risk Score:\*\* 51\/100 \(MODERATE\)/.test(crm),
+  crm.match(/Deal Risk Score:[^\n]*/)?.[0]
+);
+const rendered = normalizeResult({
+  proprietary_indices: runA.pi,
+  crm_intelligence: {
+    dominant_equilibrium_force: "",
+    structural_constraint_type: "",
+    deal_state: "",
+    viability_score: "0",
+    trajectory_type: "",
+    equilibrium_state: "",
+    buyer_intent_strength: "",
+    effective_intent: "",
+    constraint_pressure: "",
+    reactivation_probability: "",
+    recommended_next_action: "",
+    deal_risk_index: "100",
+    risk_tier: "CRITICAL",
+  },
+  stakeholders: runA.stakeholders,
+});
+check(
+  "report assembler overwrites a stale CRM deal-risk string with the scored index",
+  rendered.crm_intelligence?.deal_risk_index === String(runA.pi.deal_risk_index) &&
+    rendered.crm_intelligence?.risk_tier === runA.pi.risk_tier &&
+    rendered.stakeholders?.some((person) => person.name === "Dave"),
+  {
+    crm: rendered.crm_intelligence?.deal_risk_index,
+    tier: rendered.crm_intelligence?.risk_tier,
+    scored: runA.pi.deal_risk_index,
+  }
 );
 
 // --- 11. Failover / schema conformance (same normalized schema) ---
@@ -411,6 +457,104 @@ check(
     (row) => row.name === "MO" && /mark o'?brien/i.test(`${row.persona} ${row.role}`)
   ),
   peopleMapRows(runA.stakeholders)
+);
+
+// --- 13. Northline evidence integrity ---
+check("Sarah Chen is not Mark O'Brien", samePerson("Sarah Chen", "Mark O'Brien") === false);
+const turns = parseTurns(transcript);
+const sarahTurn = turns.turns.find((turn) => turn.speaker === "SC");
+const markTurn = turns.turns.find((turn) => turn.speaker === "MO");
+check("speaker label SC stays the seller", sarahTurn?.role === "seller" && sarahTurn.speaker === "SC", sarahTurn);
+check("speaker label MO stays the buyer and is not renamed to Mark", markTurn?.role === "buyer" && markTurn.speaker === "MO", markTurn);
+check(
+  "conditional purchase is not a completed commitment",
+  purchaseMotion(transcript).motion === "deal_open",
+  purchaseMotion(transcript)
+);
+const urgency = diagnosticProfile(transcript).urgency;
+check(
+  "Q3 is not converted into a calendar date",
+  !/\b20\d{2}-\d{2}-\d{2}\b/.test(urgency) && !/\b(?:january|february|april|may|june|july|august|september|october|november|december)\b/i.test(urgency),
+  urgency
+);
+check(
+  "phased pilot is the buyer's stated condition",
+  quoteSpeakerRole(transcript, "A phased pilot on a non-production line") === "buyer"
+);
+check(
+  "one-pager is a seller offer, not a buyer requirement",
+  quoteSpeakerRole(transcript, "I'll send a one-pager for Dave") === "seller" &&
+    sellerOfferLabeledAsBuyerRequirement(
+      transcript,
+      "Buyer requirement: I'll send a one-pager for Dave and propose three slots after month-end."
+    ) === true
+);
+check(
+  "buyer-stated pilot is not flagged as a seller offer",
+  sellerOfferLabeledAsBuyerRequirement(
+    transcript,
+    "Buyer requirement: A phased pilot on a non-production line, reference customers in discrete manufacturing."
+  ) === false
+);
+const daysInput = runA.pi.dri_inputs?.find((item) => item.field === "days_stalled");
+const roleInput = runA.pi.dri_inputs?.find((item) => item.field === "stakeholder_matrix_roles");
+check("DRI days stalled are labeled inferred, not observed CRM", daysInput?.basis === "inferred_proxy", daysInput);
+check(
+  "technical veto is not mapped as the economic buyer",
+  Boolean(roleInput?.value.includes("Dave:USER")) && !roleInput?.value.includes("Dave:ECONOMIC_BUYER"),
+  roleInput
+);
+check(
+  "DRI and viability are published as separate metrics",
+  typeof runA.pi.deal_risk_index === "number" &&
+    typeof frozen.viability_score === "number" &&
+    /separate metrics/i.test(
+      (runA.pi.explanations?.deal_risk?.factors ?? []).map((factor) => factor.text).join(" ")
+    ),
+  { dri: runA.pi.deal_risk_index, viability: frozen.viability_score }
+);
+const deadlineNotes = formatCompressedCrmNotes({
+  deal_classification: { status: runA.status },
+  deal_trajectory: { trajectory_type: frozen.trajectory_type },
+  recoverability: frozen.recoverability,
+  viability_state: { state: frozen.viability_state, viability_score: frozen.viability_score },
+  proprietary_indices: runA.pi,
+  stakeholders: runA.stakeholders,
+  force_initialization: { blocker_classification: "TEMPORARY BLOCKERS", summary: "Dave architecture gate" },
+  equilibrium_analysis: { equilibrium_breaker: "Dave technical approval pending", explanation: "Waiting on Dave" },
+  causal_forces: runA.causal.forces,
+  immediate_remediation: ["Send a one-pager for Dave this week"],
+  rescue_triage_plan: {
+    immediate_0_30_days: ["Propose three technical meeting slots after month-end"],
+    near_term_30_90_days: [],
+    long_term_90_plus_days: [],
+  },
+  client_name: "Northline Manufacturing",
+  source_transcript: transcript,
+});
+const planSection = deadlineNotes.split("### What to do")[1]?.split("### Snapshot")[0] ?? deadlineNotes;
+const weekSection = planSection.split("**This week (0–7 days):**")[1]?.split(/\*\*Stated checkpoint:\*\*|\*\*30 days:\*\*/)[0] ?? "";
+check(
+  "preparation this week and the later meeting are not one deadline",
+  /No single deadline was invented/.test(planSection) &&
+    /\*\*Stated checkpoint:\*\*/.test(planSection) &&
+    /after month-end/.test(planSection) &&
+    !/after month-end/.test(weekSection) &&
+    !/\b20\d{2}-\d{2}-\d{2}\b/.test(planSection),
+  planSection.slice(0, 500)
+);
+const conditionalLock = explainForceLock(transcript, northlineForces);
+check(
+  "Northline conditional language does not replace extracted forces",
+  conditionalLock.transforms.length === 0 && conditionalLock.forces === northlineForces,
+  conditionalLock.transforms
+);
+const repeat = scoreNorthline();
+check(
+  "a second run on the same inputs matches the first",
+  repeat.frozen.viability_score === runA.frozen.viability_score &&
+    repeat.pi.deal_risk_index === runA.pi.deal_risk_index &&
+    repeat.status === runA.status
 );
 
 console.log(
