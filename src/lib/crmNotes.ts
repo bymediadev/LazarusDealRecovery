@@ -1,4 +1,10 @@
 import { PostMortemResult, StakeholderSignal } from "../types";
+import {
+  findEconomicDecisionMaker,
+  findInvisibleVetoOrMissingAuthority,
+  findTechnicalVetoHolder,
+  formatAuthorityLabel,
+} from "./authorityRoles";
 import { formatDiagnosticMarkdown, matrixFacing, recommendedMoveLine, unifiedDealHeadline } from "./reportMatrix";
 import { formatMetricLegendMarkdown } from "./metricLegend";
 import { recoveryActionNote, uniqueRecoveryNotes } from "./recoveryPlan";
@@ -32,13 +38,12 @@ function facingFor(result: PostMortemResult) {
 
 function invisibleVetoHolder(result: PostMortemResult): string {
   const stakeholders = result.stakeholders ?? [];
-  const veto =
-    stakeholders.find((s) =>
-      /hidden detractor|absent decision maker/i.test(s.persona_type ?? s.stance ?? "")
-    ) ??
-    stakeholders.find((s) => /technical_veto/i.test(s.authority_level ?? ""));
-  if (veto) return stakeholderLabel(veto);
-  const owner = stakeholders.find((s) => /economic owner/i.test(s.persona_type ?? s.stance ?? ""));
+  const veto = findInvisibleVetoOrMissingAuthority(stakeholders);
+  if (veto) return formatAuthorityLabel(veto);
+  const technical = findTechnicalVetoHolder(stakeholders);
+  // Identified technical approval ≠ missing/invisible authority.
+  if (technical) return "Not identified";
+  const owner = findEconomicDecisionMaker(stakeholders);
   if (facingFor(result).offForecast) {
     return owner
       ? `None identified. ${owner.name} is the business owner and apparent decision-maker; no purchase process was established.`

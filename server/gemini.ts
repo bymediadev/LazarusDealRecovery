@@ -34,6 +34,7 @@ import {
 } from "../src/lib/reportMatrix.js";
 import { commercialBaselineFromText, type CommercialBaseline } from "../src/lib/commercialBaseline.js";
 import { attributeQuote } from "../src/lib/evidenceAttribution.js";
+import { buildDiagnosticRunMetadata } from "../src/lib/diagnosticIntegrity.js";
 import { assessIntentExtraction, buildIntentRetryInstructions } from "../src/lib/intentExtraction.js";
 import { preserveTriggerEstimate } from "../src/lib/triggerEstimate.js";
 import { isOpenAnalysisMode } from "./relevanceGate.js";
@@ -258,6 +259,15 @@ export interface EnterpriseAnalysis {
   recoverability?: RecoverabilityAssessment;
   report_validation?: ReportValidation;
   diagnostic_profile?: ReturnType<typeof diagnosticProfile>;
+  /** Reproducibility metadata — no transcript text. */
+  diagnostic_run?: {
+    scoring_engine_version: string;
+    extraction_schema_version: string;
+    formula_config_version: string;
+    model_provider?: string;
+    model_version?: string;
+    scored_at: string;
+  };
 }
 
 const VALID_STATUSES: EnterpriseDealStatus[] = [
@@ -426,12 +436,18 @@ function applyCanonicalScoring(
   const report_validation = validateReportMatrix({
     status,
     riskTier: proprietary_indices.risk_tier,
+    dealRiskIndex: proprietary_indices.deal_risk_index,
     viability: frozen.viability_score,
     recoverabilityStatus: frozen.recoverability.status,
+    trajectory: frozen.trajectory_type,
     forces: causal.forces,
     immediateActionCount,
     stakeholders,
     transcript,
+    proposedActions: [
+      ...(result.immediate_remediation ?? []),
+      ...(result.rescue_triage_plan?.immediate_0_30_days ?? []),
+    ],
   });
 
   const projected: EnterpriseAnalysis = {
@@ -460,6 +476,7 @@ function applyCanonicalScoring(
         }
       : result.live_deal_triage,
     report_validation,
+    diagnostic_run: buildDiagnosticRunMetadata(),
     force_initialization: quiet
       ? {
           ...result.force_initialization,

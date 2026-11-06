@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { findInvisibleVetoOrMissingAuthority } from "../lib/authorityRoles";
 import { formatCompressedCrmNotes } from "../lib/crmNotes";
 import { PostMortemResult, RescueTriagePlan, StakeholderSignal } from "../types";
 
@@ -48,10 +49,11 @@ function deriveStallPoint(result: PostMortemResult): {
     (f) => f.type === "Constraint" || f.type === "Structural"
   );
 
+  const invisibleMatch = findInvisibleVetoOrMissingAuthority(stakeholders);
   const invisibleVeto =
-    stakeholders.find((s) => /hidden detractor/i.test(s.persona_type ?? s.stance ?? "")) ??
-    stakeholders.find((s) => /absent decision maker/i.test(s.persona_type ?? s.stance ?? "")) ??
-    null;
+    invisibleMatch == null
+      ? null
+      : stakeholders.find((person) => person.name === invisibleMatch.name) ?? null;
 
   const deptForces = forces.filter((f) => DEPT_PATTERN.test(`${f.factor} ${f.evidence}`));
   const collisions = deptForces.slice(0, 4).map((f) => ({

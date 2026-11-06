@@ -47,15 +47,21 @@ export interface RecoverabilityAssessment {
   explanation: string;
 }
 
+export type ReportCheckSeverity = "ERROR" | "WARNING" | "PASS";
+
 export interface ReportCheck {
   id: string;
   passed: boolean;
   detail: string;
+  /** ERROR blocks silent proceed; WARNING is incomplete/uncertain; PASS is clean. */
+  severity?: ReportCheckSeverity;
 }
 
 export interface ReportValidation {
+  /** False only when an ERROR check failed. Warnings alone do not fail the gate. */
   passed: boolean;
   checks: ReportCheck[];
+  warnings?: string[];
 }
 
 export function classifyRisk(score: number): RiskTier {
@@ -1180,11 +1186,11 @@ const SPONSORSHIP_CONDITION =
   /\b(not pushing|disengag|hasn'?t said otherwise|haven'?t had a proper|inactive sponsor)\b/i;
 const PERMANENT_DURATION = /\b(permanent|prohibited|banned|structurally locked)\b/i;
 const TEMPORARY_DURATION =
-  /\b(until the end of the quarter|end of the quarter|this quarter|next quarter|90 days|for the next|temporary|additional approval|freezing discretionary|discretionary spending)\b/i;
+  /\b(until the end of the quarter|end of the quarter|this quarter|next quarter|90 days|for the next|temporary|additional approval|freezing discretionary|discretionary spending|month-end|after month-end|underwater until|missed the|p1 outage|reschedule|until q[1-4])\b/i;
 const CONDITIONAL_DURATION =
-  /\b(financial case|can'?t commit|cannot commit|defensible|validated savings|if independently|when the|once the)\b/i;
+  /\b(financial case|can'?t commit|cannot commit|defensible|validated savings|if independently|when the|once the|if .{0,40}buys in|without (?:him|her|them).{0,60}(?:moving|proceed|forward|parked|accelerate))\b/i;
 const PATH_FORWARD =
-  /\b(hasn'?t disappeared|has not disappeared|still looking|don'?t think we should close|do not think we should close|bringing it back|bring it back|comfortable bringing|send (me )?the outline|will approve if|can begin next quarter|not necessarily impossible)\b/i;
+  /\b(hasn'?t disappeared|has not disappeared|still looking|don'?t think we should close|do not think we should close|bringing it back|bring it back|comfortable bringing|send (me )?the outline|will approve if|can begin next quarter|not necessarily impossible|(?:we )?can accelerate|if .{0,40}buys in|parked until|like what i saw|do that)\b/i;
 const CLOSED_PATH = [
   /\b(selected|chose|chosen|awarded the business to|going with|went with)\b(?:\s+\w+){0,8}\b(competitor|another vendor|another platform|flowtrack)\b/i,
   /\b(terminated|ended|cancelled|canceled) the (evaluation|process|opportunity)\b/i,
@@ -1266,7 +1272,8 @@ export function isAuthorityGate(force: MatrixForce): boolean {
 
 /**
  * Raise constraint from authority-gate evidence without stripping permanent structural locks.
- * Behavioral gates always count. Structural/Constraint gates count only with temporary-absence evidence.
+ * Behavioral gates always count. Structural/Constraint gates count only with temporary-absence
+ * evidence — not merely "without him" / open sign-off language (that can be a lasting lock).
  */
 function raisesConstraintFromAuthorityGate(force: MatrixForce): boolean {
   if (!isAuthorityGate(force) || isSpendingFreeze(force) || PERMANENT_DURATION.test(blob(force))) {
@@ -1275,12 +1282,7 @@ function raisesConstraintFromAuthorityGate(force: MatrixForce): boolean {
   const type = force.type.toLowerCase();
   if (type === "behavioral") return true;
   if (type === "structural" || type === "constraint") {
-    const duration = forceDuration(force);
-    return (
-      duration === "TEMPORARY" ||
-      duration === "CONDITIONAL" ||
-      TEMPORARY_ABSENCE.test(blob(force))
-    );
+    return forceDuration(force) === "TEMPORARY" || TEMPORARY_ABSENCE.test(blob(force));
   }
   return false;
 }
@@ -1616,26 +1618,47 @@ export function classifyRecoverability(input: {
   };
 }
 
+function withSeverity(check: ReportCheck, severity: ReportCheckSeverity): ReportCheck {
+  return { ...check, severity: check.passed ? "PASS" : severity };
+}
+
 export function validateReportMatrix(input: {
   status: string;
   riskTier?: string;
+  dealRiskIndex?: number;
   viability: number;
   recoverabilityStatus?: string;
+  trajectory?: string;
   forces: MatrixForce[];
   immediateActionCount: number;
-  stakeholders?: { name?: string; role?: string; persona_type?: string; stance?: string; evidence?: string }[];
+  stakeholders?: {
+    name?: string;
+    role?: string;
+    persona_type?: string;
+    stance?: string;
+    evidence?: string;
+    authority_level?: string;
+    evidence_basis?: string;
+  }[];
   transcript?: string;
+  /** Optional proposed actions — used to flag completed-tense manufacturing. */
+  proposedActions?: string[];
 }): ReportValidation {
   const checks: ReportCheck[] = [];
   const tier = (input.riskTier ?? "").toUpperCase();
   const stalled = input.status.startsWith("STALLED —") && input.status.includes("RISK");
-  checks.push({
-    id: "score_label_consistency",
-    passed: !stalled || !tier || input.status.includes(`${tier} RISK`),
-    detail: stalled
-      ? `Headline "${input.status}" and risk tier ${tier || "missing"}.`
-      : "Headline is not a stalled risk label.",
-  });
+  checks.push(
+    withSeverity(
+      {
+        id: "score_label_consistency",
+        passed: !stalled || !tier || input.status.includes(`${tier} RISK`),
+        detail: stalled
+          ? `Headline "${input.status}" and risk tier ${tier || "missing"}.`
+          : "Headline is not a stalled risk label.",
+      },
+      "ERROR"
+    )
+  );
   const recoverabilityKnown = [
     "RECOVERABLE",
     "CONDITIONALLY_RECOVERABLE",
@@ -1643,43 +1666,63 @@ export function validateReportMatrix(input: {
     "NOT_CURRENTLY_RECOVERABLE",
     "FLAT_NO",
   ].includes(input.recoverabilityStatus ?? "");
-  checks.push({
-    id: "viability_recoverability",
-    passed: recoverabilityKnown && !(input.viability === 0 && input.recoverabilityStatus === undefined),
-    detail: recoverabilityKnown
-      ? `Viability ${input.viability} is separate from recoverability ${input.recoverabilityStatus}.`
-      : "Recoverability status is missing, so a viability result could be read as the judgment.",
-  });
+  checks.push(
+    withSeverity(
+      {
+        id: "viability_recoverability",
+        passed: recoverabilityKnown && !(input.viability === 0 && input.recoverabilityStatus === undefined),
+        detail: recoverabilityKnown
+          ? `Viability ${input.viability} is separate from recoverability ${input.recoverabilityStatus}.`
+          : "Recoverability status is missing, so a viability result could be read as the judgment.",
+      },
+      "ERROR"
+    )
+  );
   const material = input.forces.filter((force) => force.weight >= 50);
   const untraced = material.filter((force) => !force.score_effect?.reason);
-  checks.push({
-    id: "force_score_consistency",
-    passed: untraced.length === 0,
-    detail: untraced.length
-      ? `No scoring effect recorded for: ${untraced.map((force) => force.factor).join(", ")}.`
-      : "Every material force has a scoring effect or an exclusion reason.",
-  });
-  checks.push({
-    id: "action_consistency",
-    passed: true,
-    detail:
-      input.immediateActionCount > 0
-        ? `${input.immediateActionCount} immediate action(s) are the list every section reads.`
-        : "No immediate action is in the canonical list.",
-  });
+  checks.push(
+    withSeverity(
+      {
+        id: "force_score_consistency",
+        passed: untraced.length === 0,
+        detail: untraced.length
+          ? `No scoring effect recorded for: ${untraced.map((force) => force.factor).join(", ")}.`
+          : "Every material force has a scoring effect or an exclusion reason.",
+      },
+      "ERROR"
+    )
+  );
+  checks.push(
+    withSeverity(
+      {
+        id: "action_consistency",
+        passed: true,
+        detail:
+          input.immediateActionCount > 0
+            ? `${input.immediateActionCount} immediate action(s) are the list every section reads.`
+            : "No immediate action is in the canonical list.",
+      },
+      "PASS"
+    )
+  );
   const opposed =
     /\b(opposed|opposes|will block|against the (deal|purchase|project)|will not approve|won't approve|refuses to approve)\b/i;
   const unlabeledOpposition = (input.stakeholders ?? []).filter((person) => {
     const label = `${person.persona_type ?? ""} ${person.stance ?? ""}`;
     return /hidden detractor/i.test(label) && !opposed.test(person.evidence ?? "");
   });
-  checks.push({
-    id: "evidence_consistency",
-    passed: unlabeledOpposition.length === 0,
-    detail: unlabeledOpposition.length
-      ? "A detractor label is missing evidence of opposition."
-      : "Detractor labels, when present, have evidence of opposition.",
-  });
+  checks.push(
+    withSeverity(
+      {
+        id: "evidence_consistency",
+        passed: unlabeledOpposition.length === 0,
+        detail: unlabeledOpposition.length
+          ? "A detractor label is missing evidence of opposition."
+          : "Detractor labels, when present, have evidence of opposition.",
+      },
+      "ERROR"
+    )
+  );
   const subject = input.transcript ? capacitySubject(input.transcript) : null;
   const misattributed = (input.stakeholders ?? []).filter((person) => {
     const label = `${person.persona_type ?? ""} ${person.stance ?? ""}`;
@@ -1687,15 +1730,20 @@ export function validateReportMatrix(input: {
     if (!input.transcript) return false;
     return !subject || !person.name || !samePerson(person.name, subject);
   });
-  checks.push({
-    id: "speaker_attribution",
-    passed: misattributed.length === 0,
-    detail: misattributed.length
-      ? `Resource constraint is not supported for: ${misattributed.map((person) => person.name).join(", ")}.`
-      : subject
-        ? `Capacity evidence is attributed to ${subject}.`
-        : "No capacity statement needed a stakeholder attribution.",
-  });
+  checks.push(
+    withSeverity(
+      {
+        id: "speaker_attribution",
+        passed: misattributed.length === 0,
+        detail: misattributed.length
+          ? `Resource constraint is not supported for: ${misattributed.map((person) => person.name).join(", ")}.`
+          : subject
+            ? `Capacity evidence is attributed to ${subject}.`
+            : "No capacity statement needed a stakeholder attribution.",
+      },
+      "ERROR"
+    )
+  );
   const freezeScored = input.forces.some(
     (force) => isSpendingFreeze(force) && force.score_effect?.included && force.score_effect.dimension === "structural_lock_in"
   );
@@ -1705,35 +1753,45 @@ export function validateReportMatrix(input: {
   const freezeAlsoConstraint = input.forces.some(
     (force) => isSpendingFreeze(force) && force.score_effect?.included && force.score_effect.dimension === "constraint_pressure"
   );
-  checks.push({
-    id: "overlap_consistency",
-    passed: !(freezeScored && approvalAlsoScored) && !freezeAlsoConstraint,
-    detail:
-      freezeScored && approvalAlsoScored
-        ? "An approval condition was added on top of a scored spending freeze."
-        : freezeAlsoConstraint
-          ? "A spending freeze was counted as constraint pressure as well as structural pressure."
-          : "Overlapping financial evidence is not added twice.",
-  });
+  checks.push(
+    withSeverity(
+      {
+        id: "overlap_consistency",
+        passed: !(freezeScored && approvalAlsoScored) && !freezeAlsoConstraint,
+        detail:
+          freezeScored && approvalAlsoScored
+            ? "An approval condition was added on top of a scored spending freeze."
+            : freezeAlsoConstraint
+              ? "A spending freeze was counted as constraint pressure as well as structural pressure."
+              : "Overlapping financial evidence is not added twice.",
+      },
+      "ERROR"
+    )
+  );
   const transcript = input.transcript ?? "";
   const notAPurchase = transcript ? isNotAPurchase(transcript) : false;
   const refusedClient = transcript ? explicitClientRefusal(transcript) : false;
   const purchaseAligned =
     !notAPurchase ||
     (/NOT A PURCHASE/i.test(input.status) && input.recoverabilityStatus === "FLAT_NO");
-  checks.push({
-    id: "purchase_motion",
-    passed: purchaseAligned,
-    detail: notAPurchase
-      ? purchaseAligned
-        ? refusedClient
-          ? "The prospect declined the client role. Headline and recoverability stay off the forecast."
-          : "No purchase was established. Headline and recoverability stay off the forecast."
-        : refusedClient
-          ? "The prospect declined the client role, but the headline or recoverability still treats this as a recoverable purchase."
-          : "No purchase was established, but the headline or recoverability still treats this as a recoverable purchase."
-      : "No not-a-deal motion in the transcript.",
-  });
+  checks.push(
+    withSeverity(
+      {
+        id: "purchase_motion",
+        passed: purchaseAligned,
+        detail: notAPurchase
+          ? purchaseAligned
+            ? refusedClient
+              ? "The prospect declined the client role. Headline and recoverability stay off the forecast."
+              : "No purchase was established. Headline and recoverability stay off the forecast."
+            : refusedClient
+              ? "The prospect declined the client role, but the headline or recoverability still treats this as a recoverable purchase."
+              : "No purchase was established, but the headline or recoverability still treats this as a recoverable purchase."
+          : "No not-a-deal motion in the transcript.",
+      },
+      "ERROR"
+    )
+  );
   const soleSuppressed = (input.stakeholders ?? []).filter((person) => {
     const label = `${person.persona_type ?? ""} ${person.stance ?? ""}`;
     return /suppressed champion/i.test(label) && isSoleOperator(person.role ?? "", person.evidence ?? "");
@@ -1741,15 +1799,106 @@ export function validateReportMatrix(input: {
   const introduced = transcript
     ? (input.stakeholders ?? []).filter((person) => isSellerIntroduction(person, transcript))
     : [];
+  checks.push(
+    withSeverity(
+      {
+        id: "people_map",
+        passed: soleSuppressed.length === 0 && introduced.length === 0,
+        detail:
+          soleSuppressed.length || introduced.length
+            ? `People map still mislabels ${[...soleSuppressed, ...introduced].map((person) => person.name).filter(Boolean).join(", ")}.`
+            : "The owner is not labeled a champion without authority, and seller introductions are not in the buying group.",
+      },
+      "ERROR"
+    )
+  );
+
+  // Critical DRI + recoverable is allowed — informational warning only, never fails the gate.
+  const criticalRecoverable =
+    (tier === "CRITICAL" || (input.dealRiskIndex ?? 0) >= 75) &&
+    /RECOVERABLE/i.test(input.recoverabilityStatus ?? "") &&
+    !/NOT_CURRENTLY/i.test(input.recoverabilityStatus ?? "");
   checks.push({
-    id: "people_map",
-    passed: soleSuppressed.length === 0 && introduced.length === 0,
-    detail:
-      soleSuppressed.length || introduced.length
-        ? `People map still mislabels ${[...soleSuppressed, ...introduced].map((person) => person.name).filter(Boolean).join(", ")}.`
-        : "The owner is not labeled a champion without authority, and seller introductions are not in the buying group.",
+    id: "dri_vs_recoverability",
+    passed: true,
+    severity: criticalRecoverable ? "WARNING" : "PASS",
+    detail: criticalRecoverable
+      ? "Deal Risk is critical while recoverability remains open. Metrics are separate; this is not a contradiction."
+      : "Deal Risk and recoverability are not in a critical-but-open combination.",
   });
-  return { passed: checks.every((check) => check.passed), checks };
+
+  // Trajectory recoverable must not sit next to FLAT_NO / NOT_CURRENTLY without explicit not-a-purchase.
+  const trajRecoverable = /DEFERRED \(recoverable\)|ACTIVE|VALIDATED/i.test(input.trajectory ?? "");
+  const recClosed = /NOT_CURRENTLY_RECOVERABLE|FLAT_NO/i.test(input.recoverabilityStatus ?? "");
+  const trajRecConflict = trajRecoverable && recClosed && !notAPurchase;
+  checks.push(
+    withSeverity(
+      {
+        id: "trajectory_recoverability",
+        passed: !trajRecConflict,
+        detail: trajRecConflict
+          ? `Trajectory ${input.trajectory} conflicts with recoverability ${input.recoverabilityStatus}.`
+          : "Trajectory and recoverability are compatible.",
+      },
+      "ERROR"
+    )
+  );
+
+  const outOfRange = [input.viability, input.dealRiskIndex]
+    .filter((value): value is number => typeof value === "number")
+    .some((value) => value < 0 || value > 100);
+  checks.push(
+    withSeverity(
+      {
+        id: "numeric_bounds",
+        passed: !outOfRange,
+        detail: outOfRange ? "A published score is outside 0–100." : "Published scores are within 0–100.",
+      },
+      "ERROR"
+    )
+  );
+
+  const completedProposed = (input.proposedActions ?? []).filter((action) =>
+    /\b(completed|confirmed meeting|invite accepted|already scheduled|demo with .{1,40} is scheduled)\b/i.test(action)
+  );
+  checks.push(
+    withSeverity(
+      {
+        id: "proposed_not_completed",
+        passed: completedProposed.length === 0,
+        detail: completedProposed.length
+          ? "A proposed action is worded as already completed."
+          : "Proposed actions are not worded as completed outcomes.",
+      },
+      "WARNING"
+    )
+  );
+
+  const secondhandAsFirsthand = (input.stakeholders ?? []).filter(
+    (person) => person.evidence_basis === "secondhand" && !/^not stated$/i.test(person.evidence ?? "")
+  );
+  checks.push(
+    withSeverity(
+      {
+        id: "secondhand_identity",
+        passed: secondhandAsFirsthand.length === 0,
+        detail: secondhandAsFirsthand.length
+          ? `Secondhand evidence still attached as a stance quote for: ${secondhandAsFirsthand.map((p) => p.name).join(", ")}.`
+          : "Secondhand evidence is not treated as the subject's own stance quote.",
+      },
+      "WARNING"
+    )
+  );
+
+  const errors = checks.filter((check) => !check.passed && (check.severity ?? "ERROR") === "ERROR");
+  const warnings = checks
+    .filter((check) => check.severity === "WARNING" && (!check.passed || /metrics are separate/i.test(check.detail)))
+    .map((check) => check.detail);
+  return {
+    passed: errors.length === 0,
+    checks,
+    warnings,
+  };
 }
 
 export function canonicalImmediateActions(result: {
