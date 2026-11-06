@@ -74,6 +74,7 @@ export default function FastFactsPanel({
     blockedOn: absent?.name ?? veto?.name ?? null,
     viabilityState: result.viability_state?.state,
     recoverabilityScore: result.recoverability_score ?? result.viability_state?.viability_score,
+    riskTier: result.proprietary_indices?.risk_tier,
   });
   const facing = headline.facing;
   const blocker = coreBlocker(result);

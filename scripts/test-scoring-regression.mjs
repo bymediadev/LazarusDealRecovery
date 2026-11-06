@@ -1697,10 +1697,49 @@ const stalledHeadlineLine = unifiedDealHeadline({
   recoverabilityScore: 40,
 }).line;
 if (
-  !/^Stalled and recoverable,/i.test(stalledHeadlineLine) ||
-  !/blocked on Dave/i.test(stalledHeadlineLine)
+  !/^Stalled/i.test(stalledHeadlineLine) ||
+  !/Recoverable/i.test(stalledHeadlineLine) ||
+  !/Blocked on Dave/i.test(stalledHeadlineLine) ||
+  /undetermined|Viability deferred/i.test(stalledHeadlineLine)
 ) {
   console.error("FAIL: Unified headline must consolidate status/recoverability/forecast", stalledHeadlineLine);
+  failed = true;
+}
+const behavioralDave = deriveCanonicalState(
+  [
+    {
+      factor: "Dave absent from demo",
+      type: "Behavioral",
+      weight: 75,
+      evidence: "Dave missed the technical demo yesterday. Without him nothing is approved.",
+    },
+    {
+      factor: "Interest in platform",
+      type: "Intent",
+      weight: 62,
+      evidence: "I like what I saw in the overview",
+    },
+    {
+      factor: "Budget in range",
+      type: "Enabler",
+      weight: 45,
+      evidence: "$280,000 annual platform fee was in range",
+    },
+  ],
+  "TEMPORARY BLOCKERS"
+);
+if (behavioralDave.frozen.constraint_pressure < 50) {
+  console.error(
+    "FAIL: An absent-approver force must raise constraint pressure above clean/zero",
+    behavioralDave.frozen.constraint_pressure
+  );
+  failed = true;
+}
+if (/×|1\.00|1\.35|constraintFactor|enabler multiplier/i.test(behavioralDave.frozen.derivation_formula)) {
+  console.error(
+    "FAIL: Customer-facing derivation must not expose raw multipliers",
+    behavioralDave.frozen.derivation_formula
+  );
   failed = true;
 }
 const absentOnlyDispersion = computeStakeholderDispersion([

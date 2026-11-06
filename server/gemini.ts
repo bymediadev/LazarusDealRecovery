@@ -1004,7 +1004,9 @@ function buildExtractionMessage(
   return `${buildTranscriptConstraints(transcript, dealValue)}${buildDeepContextMessageBlock(deepContext ?? {})}
 
 Build the People Map (every persona + persona_type) and causal forces with verbatim evidence.
+Stakeholder evidence must be that person's own words proving stance/support/objection. If they never spoke a stance line, set evidence to exactly "not stated". Secondhand descriptions belong on the speaker, not the subject.
 Structural parent forces must quote the buyer/prospect — not the rep's pitch.
+Also: absent approver / open sign-off gates are Constraint forces (not clean Constraint 0 while a named person blocks).
 Do NOT output viability_state, buyer_state, deal_trajectory, or resolution_cycles — server computes scores.
 ${hasHistory ? "Cross-reference live dialogue with HISTORICAL CRM CONTEXT. Populate historical_context_match with dated evidence links." : ""}
 Evaluate friction_deltas (administrative gatekeeping, stakeholder dispersion, budget scoping gap) from live dialogue.

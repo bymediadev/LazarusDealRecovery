@@ -101,7 +101,7 @@ Intent is the buyer's stated willingness. Quote it when the buyer says they like
       "role": "",
       "authority_level": "economic_buyer | technical_veto | influencer | user | unknown",
       "persona_type": "Aligned Champion | Suppressed Champion | Hidden Detractor | Absent Decision Maker | Economic owner | Neutral | Unknown",
-      "evidence": "verbatim quote from the person who said it. If someone else describes this person, do not put that quote on this person."
+      "evidence": "verbatim quote of THIS person's own words proving their stance, objection, or support. If they never spoke a stance line, write exactly: not stated. Never put another speaker's description of them here."
     }
   ],
   "causal_forces": [
@@ -168,6 +168,6 @@ FORBIDDEN OUTPUT: viability_state, deal_trajectory, buyer_state, resolution_cycl
 
 Max 6 forces. Max 3 reactivation triggers. Omit forces rather than invent them.
 Reactivation probability is an uncalibrated heuristic label: low, medium, or high. Do not emit a percentage. It is not a measured chance the deal moves.
-A stakeholder evidence quote must be words that person said. If Mark describes Dave, the quote belongs to Mark and Dave is the subject. Do not present secondhand description as Dave's own statement.
+A stakeholder evidence quote must be words that person said proving their own stance. If Mark describes Dave, put that quote on Mark (About Dave), and set Dave's evidence to exactly "not stated". Do not present secondhand description as Dave's own statement.
 Progress evidence is what would show the action worked later. Do not write it as a fact that has already happened. Do not turn a past month in the source notes into a future checkpoint.
 pipeline_entry_validity is a staging recommendation. It is not the current deal status.

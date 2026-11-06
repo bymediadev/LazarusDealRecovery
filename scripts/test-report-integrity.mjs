@@ -262,7 +262,9 @@ check(
 );
 check(
   "Dave's row does not present Mark's sentence as Dave's words",
-  dave.quotes.length === 0 && /No firsthand statement/i.test(dave.secondhandNote ?? ""),
+  dave.quotes.length === 1 &&
+    /^not stated$/i.test(dave.quotes[0]?.text ?? "") &&
+    /No firsthand statement/i.test(dave.secondhandNote ?? ""),
   dave
 );
 

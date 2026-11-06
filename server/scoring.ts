@@ -579,6 +579,15 @@ function viabilityLabel(
   return "DEFERRED VIABILITY";
 }
 
+function qualitativeBand(value: number, cap = 100): string {
+  const ratio = Math.max(0, Math.min(1, value / Math.max(1, cap)));
+  if (ratio < 0.25) return "low";
+  if (ratio < 0.55) return "moderate";
+  if (ratio < 0.8) return "elevated";
+  return "high";
+}
+
+/** Internal audit string — no raw multipliers (× / 1.00 / 1.35) for customer surfaces. */
 function formatFormula(f: {
   intent_strength: number;
   constraint_pressure: number;
@@ -590,13 +599,11 @@ function formatFormula(f: {
   equilibrium_state: CanonicalEquilibrium;
   trajectory_type: CanonicalTrajectory;
 }): string {
-  const cf = constraintFactor(f.constraint_pressure);
-  const em = enablerMultiplier(f.enabler_strength);
   return [
-    `Effective Intent = ${f.intent_strength} × ${cf.toFixed(2)} (constraint) × ${em.toFixed(2)} (enabler) = ${f.effective_intent}`,
-    `Viability = ${f.viability_score} | Enabler ${f.enabler_strength} | Constraint ${f.constraint_pressure} | Structural ${f.structural_lock_in}`,
-    `Equilibrium: ${f.structural_lock_in}+${f.constraint_pressure} → ${f.equilibrium_state}. Trajectory: ${f.trajectory_type}.`,
-  ].join(" | ");
+    `Effective intent ${qualitativeBand(f.effective_intent)} from intent ${qualitativeBand(f.intent_strength)}, constraint ${qualitativeBand(f.constraint_pressure)}, enabler ${qualitativeBand(f.enabler_strength)}.`,
+    `Viability ${f.viability_score}. Constraint ${f.constraint_pressure}. Structural ${f.structural_lock_in}.`,
+    `Equilibrium ${f.equilibrium_state}. Trajectory ${f.trajectory_type}.`,
+  ].join(" ");
 }
 
 function snapshot(

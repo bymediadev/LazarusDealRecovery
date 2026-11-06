@@ -247,6 +247,13 @@ export function attributeQuote(transcript: string, stakeholderName: string, quot
   };
 }
 
+const NOT_STATED = "not stated";
+
+/**
+ * People-map rows: each person only shows a quote that is their own firsthand stance.
+ * Secondhand lines stay on the speaker with an "About X" note. Subjects without a
+ * firsthand utterance get exactly `not stated` — never a borrowed sentence.
+ */
 export function peopleMapRows(stakeholders: StakeholderInput[]): PeopleMapRow[] {
   const rows: PeopleMapRow[] = stakeholders.map((person) => ({
     name: person.name,
@@ -259,28 +266,46 @@ export function peopleMapRows(stakeholders: StakeholderInput[]): PeopleMapRow[] 
 
   for (const person of stakeholders) {
     const quote = person.evidence?.replace(/^"|"$/g, "").trim();
-    if (!quote) continue;
+    if (!quote || normalize(quote) === normalize(NOT_STATED)) continue;
     const basis = person.evidence_basis ?? "unattributed";
     const speaker = person.evidence_speaker?.trim() || null;
-    const speakerRow =
-      basis === "secondhand" && speaker
-        ? rows.find((row) => namesMatch(row.name, speaker))
-        : undefined;
     const subject = rows.find((row) => row.name === person.name);
-    const note =
-      basis === "secondhand" && speaker
-        ? `About ${person.name}. Said by ${speaker}, not by ${person.name}.`
-        : basis === "firsthand" && speaker
-          ? `Said by ${speaker}.`
-          : "";
-    const target = speakerRow ?? subject;
-    if (!target) continue;
-    const key = normalize(quote);
-    if (!target.quotes.some((item) => normalize(item.text) === key)) {
-      target.quotes.push({ text: quote, note });
+    if (!subject) continue;
+
+    if (basis === "firsthand") {
+      const note = speaker ? `Said by ${speaker}.` : "Firsthand statement.";
+      const key = normalize(quote);
+      if (!subject.quotes.some((item) => normalize(item.text) === key)) {
+        subject.quotes.push({ text: quote, note });
+      }
+      continue;
     }
-    if (speakerRow && subject && speakerRow !== subject) {
+
+    if (basis === "secondhand" && speaker) {
+      const speakerRow = rows.find((row) => namesMatch(row.name, speaker));
+      const note = `About ${person.name}. Said by ${speaker}, not by ${person.name}.`;
+      if (speakerRow) {
+        const key = normalize(quote);
+        if (!speakerRow.quotes.some((item) => normalize(item.text) === key)) {
+          speakerRow.quotes.push({ text: quote, note });
+        }
+      }
       subject.secondhandNote = `No firsthand statement. ${speaker} spoke about ${person.name}.`;
+      continue;
+    }
+
+    // Unattributed evidence cannot prove this person's own stance.
+    subject.secondhandNote =
+      subject.secondhandNote ??
+      "No firsthand statement from this person was found in the transcript.";
+  }
+
+  for (const row of rows) {
+    const hasFirsthand = row.quotes.some(
+      (item) => !/about\s+/i.test(item.note) && normalize(item.text) !== normalize(NOT_STATED)
+    );
+    if (!hasFirsthand) {
+      row.quotes = [{ text: NOT_STATED, note: row.secondhandNote ? "Stance quote not spoken by this person." : "" }];
     }
   }
 

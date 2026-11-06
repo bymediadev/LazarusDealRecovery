@@ -1,6 +1,5 @@
 import { PostMortemResult, StakeholderSignal } from "../types";
-import { forecastGuidance } from "./forecastCall";
-import { formatDiagnosticMarkdown, matrixFacing, recommendedMoveLine } from "./reportMatrix";
+import { formatDiagnosticMarkdown, matrixFacing, recommendedMoveLine, unifiedDealHeadline } from "./reportMatrix";
 import { formatMetricLegendMarkdown } from "./metricLegend";
 import { recoveryActionNote, uniqueRecoveryNotes } from "./recoveryPlan";
 
@@ -78,15 +77,6 @@ function nextActionDate(result: PostMortemResult): string {
   if (!immediate) return "Within 7 days";
   const dateMatch = immediate.match(/\b(20\d{2}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})\b/);
   return dateMatch ? dateMatch[1] : "Within 7–30 days";
-}
-
-function forecastJudgment(result: PostMortemResult, status: string): string {
-  return forecastGuidance({
-    status,
-    trajectory: result.deal_trajectory?.trajectory_type,
-    recoverability: result.viability_state?.viability_score ?? result.recoverability_score,
-    viabilityState: result.viability_state?.state,
-  }).line;
 }
 
 function peopleByRole(result: PostMortemResult): string {
@@ -314,14 +304,8 @@ function metricsBlock(result: PostMortemResult): string {
   } else if (triage && triage.department_friction_index > 0) {
     lines.push(`- **Department friction index:** ${triage.department_friction_index}/100`);
   }
-  if (vs) {
-    lines.push(`- **Viability:** ${vs.state} (${vs.viability_score}/100)`);
-  }
-  if (result.recoverability) {
-    lines.push(`- **Recoverability:** ${facing.recoverabilityLabel}`);
-  }
-  if (facing.trajectoryLabel && facing.trajectoryLabel !== "—") {
-    lines.push(`- **Trajectory:** ${facing.trajectoryLabel}`);
+  if (vs && !facing.offForecast) {
+    lines.push(`- **Viability score:** ${vs.viability_score}/100`);
   }
   return lines.length ? lines.join("\n") : "- Metrics not available for this run.";
 }
@@ -335,7 +319,23 @@ export function formatCompressedCrmNotes(result: PostMortemResult): string {
   const facing = facingFor(result);
   const notADeal = facing.offForecast;
   const rawStatus = String(result.deal_classification?.status ?? result.deal_status ?? "STALLED");
-  const status = notADeal ? facing.categoryLabel : rawStatus;
+  const absent = (result.stakeholders ?? []).find((s) =>
+    /absent decision maker/i.test(`${s.persona_type ?? ""} ${s.stance ?? ""}`)
+  );
+  const vetoPerson = (result.stakeholders ?? []).find((s) =>
+    /hidden detractor|blocker/i.test(`${s.persona_type ?? ""} ${s.stance ?? ""}`)
+  );
+  const headline = unifiedDealHeadline({
+    status: rawStatus,
+    trajectory: result.deal_trajectory?.trajectory_type,
+    recoverabilityStatus: result.recoverability?.status,
+    relevanceLabel: result.relevance?.label,
+    transcript: result.source_transcript,
+    blockedOn: absent?.name ?? vetoPerson?.name ?? null,
+    viabilityState: result.viability_state?.state,
+    recoverabilityScore: result.viability_state?.viability_score ?? result.recoverability_score,
+    riskTier: result.proprietary_indices?.risk_tier,
+  });
   const rootIssue =
     result.live_deal_triage?.root_issue?.trim() ||
     result.executive_summary?.trim() ||
@@ -353,8 +353,8 @@ export function formatCompressedCrmNotes(result: PostMortemResult): string {
     `## Lazarus Deal Recovery Overview — ${client}`,
     "",
     "### Exactly what's going on",
-    `**Deal status:** ${status}`,
-    `**Forecast judgment:** ${forecastJudgment(result, notADeal ? "NOT A PURCHASE" : rawStatus)}`,
+    `**Deal status:** ${headline.line}`,
+    `**Forecast judgment:** ${headline.forecastLine}`,
     `**Root issue:** ${rootIssue}`,
     `**Core blocker:** ${blocker}`,
     `**Invisible veto / missing authority:** ${veto}`,

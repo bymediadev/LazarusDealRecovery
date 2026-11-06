@@ -1054,15 +1054,18 @@ export interface UnifiedDealHeadlineInput {
   recoverabilityStatus?: string;
   relevanceLabel?: string;
   transcript?: string;
-  /** Optional blocker person for "blocked on Name". */
+  /** Optional blocker person for "Blocked on Name". */
   blockedOn?: string | null;
   viabilityState?: string;
   recoverabilityScore?: number;
+  /** Optional risk tier from proprietary indices (LOW/MODERATE/HIGH/CRITICAL). */
+  riskTier?: string | null;
 }
 
 /**
- * Single deterministic top-line: status, recoverability, and forecast judgment in one pass.
- * Replaces conflicting Current Status / Recoverability / Forecast lines.
+ * Single deterministic top-line for the report header.
+ * Format: `Stalled — Recoverable (Blocked on Dave)` or `Moderate risk — Recoverable with focused action`.
+ * Never emits "Viability deferred", "Recoverability undetermined", or competing badge phrases.
  */
 export function unifiedDealHeadline(input: UnifiedDealHeadlineInput): {
   line: string;
@@ -1086,7 +1089,7 @@ export function unifiedDealHeadline(input: UnifiedDealHeadlineInput): {
 
   if (facing.category === "not_a_deal") {
     return {
-      line: "Not a deal and flat no as a purchase, keep off the forecast",
+      line: "Not a deal — Flat no as a purchase (Keep off the forecast)",
       facing,
       forecastLine: guidance.line,
       removeFromForecast: true,
@@ -1095,7 +1098,7 @@ export function unifiedDealHeadline(input: UnifiedDealHeadlineInput): {
   }
   if (facing.category === "unresolved") {
     return {
-      line: "Motion not established and unread, keep off the forecast until speakers can be read",
+      line: "Motion not established — Speakers unread (Keep off the forecast)",
       facing,
       forecastLine: guidance.line,
       removeFromForecast: true,
@@ -1103,27 +1106,58 @@ export function unifiedDealHeadline(input: UnifiedDealHeadlineInput): {
     };
   }
 
-  const statusBit = /CLOSED\s*WON/i.test(input.status ?? "")
+  const closedWon = /CLOSED\s*WON/i.test(input.status ?? "");
+  const closedLost = /CLOSED\s*LOST/i.test(input.status ?? "");
+  const moving = /VELOCITY|ACTIVE/i.test(input.trajectory ?? "");
+  const risk = (input.riskTier ?? "").trim().toUpperCase();
+  const riskBit =
+    risk === "CRITICAL"
+      ? "Critical risk"
+      : risk === "HIGH"
+        ? "High risk"
+        : risk === "MODERATE"
+          ? "Moderate risk"
+          : risk === "LOW"
+            ? "Low risk"
+            : "";
+
+  const statusBit = closedWon
     ? "Closed-won"
-    : /CLOSED\s*LOST/i.test(input.status ?? "")
+    : closedLost
       ? "Closed-lost"
-      : /VELOCITY|ACTIVE/i.test(input.trajectory ?? "")
-        ? "Moving"
-        : "Stalled";
-  const recoverabilityBit = (facing.recoverabilityLabel || "undetermined").toLowerCase();
+      : moving
+        ? riskBit || "Moving"
+        : riskBit
+          ? `Stalled — ${riskBit}`
+          : "Stalled";
+
+  const recoverabilityRaw = facing.recoverabilityLabel?.trim() || "";
+  const recoverabilityBit = /undetermined|^—$/i.test(recoverabilityRaw)
+    ? /recoverable/i.test(input.trajectory ?? "")
+      ? "Recoverable"
+      : moving
+        ? "On track"
+        : "Path under review"
+    : recoverabilityRaw;
+
   const blocked = input.blockedOn?.trim();
-  const forecastBit = guidance.removeFromForecast
-    ? blocked
-      ? `blocked on ${blocked}, keep off the forecast`
-      : "keep off the forecast"
-    : blocked
-      ? `blocked on ${blocked}, keep on forecast only with an owned plan`
-      : /recoverable/i.test(input.trajectory ?? "")
-        ? "keep on forecast only with an owned plan"
-        : "protect momentum";
+  const pathBit = blocked
+    ? `Blocked on ${blocked}`
+    : guidance.removeFromForecast
+      ? "Keep off the forecast"
+      : /recoverable/i.test(recoverabilityBit) || /recoverable/i.test(input.trajectory ?? "")
+        ? "Recoverable with focused action"
+        : moving
+          ? "Protect momentum"
+          : "Owned next step required";
+
+  // Avoid "Stalled — Moderate risk — Recoverable …" triple dashes when status already embeds risk.
+  const head = statusBit.includes("—")
+    ? `${statusBit.replace(/^Stalled — /, "Stalled · ")} — ${recoverabilityBit}`
+    : `${statusBit} — ${recoverabilityBit}`;
 
   return {
-    line: `${statusBit} and ${recoverabilityBit}, ${forecastBit}`,
+    line: `${head} (${pathBit})`,
     facing,
     forecastLine: guidance.line,
     removeFromForecast: guidance.removeFromForecast,
@@ -1218,6 +1252,40 @@ function isResourceLimit(force: MatrixForce): boolean {
 }
 
 /**
+ * Absent approver / open sign-off gate. Behavioral mistypes must still raise constraint
+ * pressure — Constraint 0 cannot read "clean" while a named person blocks the deal.
+ */
+const AUTHORITY_GATE =
+  /\b(not on (?:the|this) call|wasn'?t on the call|missed (?:the |today'?s |yesterday'?s )?(?:technical )?(?:demo|session|meeting|call)|absent|without (?:him|her|them)|sign[- ]?off|hasn'?t validated|has not validated|nothing(?:'s| is) approved|cannot proceed without|can'?t proceed without|architecture gate)\b/i;
+const TEMPORARY_ABSENCE =
+  /\b(missed (?:the |today'?s |yesterday'?s )?(?:technical )?(?:demo|session|meeting|call)|not on (?:the|this) call|wasn'?t on the call|underwater until|reschedule)\b/i;
+
+export function isAuthorityGate(force: MatrixForce): boolean {
+  return AUTHORITY_GATE.test(blob(force));
+}
+
+/**
+ * Raise constraint from authority-gate evidence without stripping permanent structural locks.
+ * Behavioral gates always count. Structural/Constraint gates count only with temporary-absence evidence.
+ */
+function raisesConstraintFromAuthorityGate(force: MatrixForce): boolean {
+  if (!isAuthorityGate(force) || isSpendingFreeze(force) || PERMANENT_DURATION.test(blob(force))) {
+    return false;
+  }
+  const type = force.type.toLowerCase();
+  if (type === "behavioral") return true;
+  if (type === "structural" || type === "constraint") {
+    const duration = forceDuration(force);
+    return (
+      duration === "TEMPORARY" ||
+      duration === "CONDITIONAL" ||
+      TEMPORARY_ABSENCE.test(blob(force))
+    );
+  }
+  return false;
+}
+
+/**
  * Map each force onto one scoring input. Overlapping evidence is kept once.
  * A force that does not move a score still carries the reason it was left out.
  */
@@ -1245,6 +1313,10 @@ export function mapForcesToScores(forces: MatrixForce[]): {
 
   for (const force of forces) {
     if (isSpendingFreeze(force) || isOpenPilot(force)) continue;
+    if (raisesConstraintFromAuthorityGate(force)) {
+      constraint_pressure = Math.max(constraint_pressure, force.weight);
+      continue;
+    }
     if (isResourceLimit(force) || isIndependentFinancial(force)) {
       constraint_pressure = Math.max(constraint_pressure, force.weight);
       continue;
@@ -1324,6 +1396,16 @@ export function mapForcesToScores(forces: MatrixForce[]): {
         included: true,
         duration,
         reason: "Enabler strength is the strongest Enabler-force weight.",
+      };
+    } else if (raisesConstraintFromAuthorityGate(force) && type === "behavioral") {
+      const included = force.weight === constraint_pressure && constraint_pressure > 0;
+      score_effect = {
+        dimension: "constraint_pressure",
+        included,
+        duration: duration === "UNKNOWN" ? "TEMPORARY" : duration,
+        reason: included
+          ? "An absent approver or open sign-off gate sets constraint pressure. Constraint cannot read clean while this blocker stands."
+          : `Constraint pressure stays at ${constraint_pressure}. This authority gate is recorded and is not added again.`,
       };
     } else if (type === "structural") {
       const included = force.weight === structural_lock_in;

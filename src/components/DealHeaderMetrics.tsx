@@ -1,13 +1,11 @@
 import MetricGlossary from "./MetricGlossary";
 import { formatScoreOutOf100 } from "../lib/metricLegend";
-import { formatRecoverability } from "../lib/reportMatrix";
-import { driTagClass, type ProprietaryIndices, type PostMortemResult } from "../types";
+import { driTagClass, type ProprietaryIndices } from "../types";
 
 interface Props {
   indices: ProprietaryIndices;
   viabilityScore?: number;
   intermediateViability?: number;
-  recoverability?: PostMortemResult["recoverability"];
   /** When false, stall and risk scores stay off the snapshot. */
   showScorecard?: boolean;
 }
@@ -36,7 +34,6 @@ export default function DealHeaderMetrics({
   indices: pi,
   viabilityScore,
   intermediateViability,
-  recoverability,
   showScorecard = true,
 }: Props) {
   if (!showScorecard) {
@@ -112,14 +109,6 @@ export default function DealHeaderMetrics({
             ]
               .filter((line): line is string => Boolean(line))
               .join(" ")
-          }
-        />
-        <MetricCard
-          label="Recoverability"
-          value={recoverability ? formatRecoverability(recoverability.status) : "—"}
-          detail={
-            recoverability?.explanation ??
-            "Recoverability is judged from whether a path still exists. It is not the viability score."
           }
         />
       </div>

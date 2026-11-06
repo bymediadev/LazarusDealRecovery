@@ -3,7 +3,6 @@ import { readConstraint } from "../lib/constraintReading";
 import { mergeOverlappingQuotes } from "../lib/evidenceQuotes";
 import { presentCommercialBaseline } from "../lib/commercialBaseline";
 import { canonicalImmediateActions, unifiedDealHeadline } from "../lib/reportMatrix";
-import { convergenceExplanation, viabilityCycleDisplay } from "../lib/convergenceNote";
 import { recoveryActionLines } from "../lib/recoveryPlan";
 import type { PostMortemResult } from "../types";
 
@@ -81,8 +80,6 @@ function evidenceQuotes(result: PostMortemResult): string[] {
 export default function ExecutiveBrief({ result }: Props) {
   const status = result.deal_classification?.status ?? result.deal_status ?? "UNKNOWN";
   const viability = result.viability_state?.viability_score ?? result.recoverability_score;
-  const risk = result.proprietary_indices?.deal_risk_index;
-  const riskTier = result.proprietary_indices?.risk_tier;
   const baseline = presentCommercialBaseline({
     transcript: result.source_transcript,
     stored: result.commercial_baseline,
@@ -93,7 +90,6 @@ export default function ExecutiveBrief({ result }: Props) {
     baseline.owner ? `Account Owner: ${baseline.owner}` : null,
     baseline.target ? `Baseline Target: ${baseline.target}` : null,
   ];
-  const riskLabel = riskTier ? riskTier.charAt(0) + riskTier.slice(1).toLowerCase() : null;
   const prose = stallProse(result);
   const allQuotes = evidenceQuotes(result);
   const quotes = allQuotes.slice(0, 2);
@@ -113,17 +109,11 @@ export default function ExecutiveBrief({ result }: Props) {
     blockedOn: blockedOnName(result),
     viabilityState: result.viability_state?.state,
     recoverabilityScore: viability,
+    riskTier: result.proprietary_indices?.risk_tier,
   });
   const facing = headline.facing;
   const steps = headline.showRecoveryPlan ? canonicalImmediateActions(result) : [];
   const cycleRows = result.resolution_cycles?.cycles ?? [];
-  const viabilityDisplay = viabilityCycleDisplay(cycleRows, viability);
-  const convergence = convergenceExplanation({
-    convergenceStatus: result.resolution_cycles?.convergence_status,
-    totalCycles: result.resolution_cycles?.total_cycles ?? cycleRows.length,
-    equilibrium: result.equilibrium_analysis?.state,
-    trajectory: facing.trajectoryLabel,
-  });
 
   return (
     <section className="executive-brief" aria-label="Executive brief">
@@ -151,17 +141,6 @@ export default function ExecutiveBrief({ result }: Props) {
             {item.kind === "seller_revenue" ? "Seller revenue" : "Amount in the call"}: {item.label}. {item.note}
           </p>
         ))}
-        <p className="executive-brief-status-metrics">
-          {!facing.offForecast && viability !== undefined && <span>Viability: {viability}</span>}
-          {!facing.offForecast && risk !== undefined && (
-            <span>
-              Deal Risk Index: {risk}
-              {riskLabel ? ` (${riskLabel})` : ""}
-            </span>
-          )}
-        </p>
-        {!facing.offForecast && viabilityDisplay.note && <p className="meta-line">{viabilityDisplay.note}</p>}
-        {convergence && <p className="meta-line">{convergence}</p>}
         {result.report_validation && !result.report_validation.passed && (
           <p className="meta-line">
             Report check failed:{" "}

@@ -208,6 +208,7 @@ export default function AnalysisReport({
     blockedOn: blocked,
     viabilityState: vs.state,
     recoverabilityScore: vs.viability_score,
+    riskTier: pi?.risk_tier,
   });
   const facing = headline.facing;
   const trajectoryClass = facing.offForecast ? "status-failed" : trajectoryTagClass(dt.trajectory_type);
@@ -266,21 +267,6 @@ export default function AnalysisReport({
       <div className={`deal-status-banner ${tagClass}`}>
         <span className="deal-status-mode">Deterministic Scoring Engine</span>
         <span className="deal-status-label">{headline.line}</span>
-        <div className="score-row">
-          {!facing.offForecast && (
-          <span className={`confidence-score ${viabilityClass}`}>
-            Viability {vs.viability_score}
-          </span>
-          )}
-          <span className={`confidence-score ${trajectoryClass}`}>
-            {facing.trajectoryLabel}
-          </span>
-          {init?.blocker_classification && (
-            <span className={`confidence-score ${blockerClass}`}>
-              {init.blocker_classification}
-            </span>
-          )}
-        </div>
         {r.client_name && <span className="deal-status-client">{r.client_name}</span>}
       </div>
 
@@ -336,13 +322,12 @@ export default function AnalysisReport({
                     <td>{person.persona || "—"}</td>
                     <td className="force-evidence">
                       {person.quotes.map((quote) => (
-                        <div key={quote.text}>
-                          <div>"{quote.text}"</div>
+                        <div key={`${person.name}-${quote.text}-${quote.note}`}>
+                          <div>{/^not stated$/i.test(quote.text) ? quote.text : `"${quote.text}"`}</div>
                           {quote.note && <p className="meta-line">{quote.note}</p>}
                         </div>
                       ))}
                       {person.secondhandNote && <p className="meta-line">{person.secondhandNote}</p>}
-                      {person.quotes.length === 0 && !person.secondhandNote && "—"}
                     </td>
                   </tr>
                 ))}
@@ -551,7 +536,9 @@ export default function AnalysisReport({
         <h2 className="card-title">Emergent Viability State</h2>
         <div className="card-body">
           <div className="viability-header">
-            <span className={`viability-badge ${viabilityClass}`}>{facing.offForecast ? facing.categoryLabel : vs.state}</span>
+            <span className={`viability-badge ${viabilityClass}`}>
+              {facing.offForecast ? facing.categoryLabel : headline.line}
+            </span>
             {!facing.offForecast && (
               <span className="viability-score">{vs.viability_score}/100</span>
             )}
@@ -566,16 +553,33 @@ export default function AnalysisReport({
               )}
             </p>
           )}
-          <p className="meta-line" style={{ marginTop: "0.5rem" }}>
-            Frozen derivation — read-only across all sections
-          </p>
           {dc_comp && (
-            <div className="derivation-grid">
-              <div className="derivation-metric"><span>Raw intent</span><strong>{dc_comp.intent_strength}</strong></div>
-              <div className="derivation-metric"><span>− Constraint</span><strong>{dc_comp.constraint_pressure}</strong></div>
-              <div className="derivation-metric"><span>− Structural</span><strong>{dc_comp.structural_lock_in_impact}</strong></div>
-              <div className="derivation-metric"><span>+ Timing</span><strong>{dc_comp.timing_accessibility}</strong></div>
-            </div>
+            <ul className="risk-strength-list" style={{ marginTop: "0.75rem" }}>
+              {(
+                [
+                  ["Intent", dc_comp.intent_strength],
+                  ["Constraint", dc_comp.constraint_pressure],
+                  ["Structural", dc_comp.structural_lock_in_impact],
+                  ["Timing", dc_comp.timing_accessibility],
+                ] as const
+              ).map(([label, value]) => {
+                const level =
+                  value < 25 ? "low" : value < 55 ? "moderate" : value < 80 ? "elevated" : "high";
+                const width =
+                  level === "high" ? 92 : level === "elevated" ? 72 : level === "moderate" ? 48 : 22;
+                return (
+                  <li key={label}>
+                    <div className="risk-strength-row">
+                      <span>{label}</span>
+                      <span className="risk-strength-level">{level}</span>
+                    </div>
+                    <div className="force-bar-track" aria-hidden="true">
+                      <div className="force-bar-fill" style={{ width: `${width}%` }} />
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </div>
       </article>
@@ -922,7 +926,6 @@ export default function AnalysisReport({
           indices={pi}
           viabilityScore={vs.viability_score}
           intermediateViability={cycles?.cycles?.[0]?.state_snapshot?.viability_score}
-          recoverability={r.recoverability}
           showScorecard={facing.showScorecard && !facing.offForecast}
         />
       )}
