@@ -5,7 +5,7 @@ import { convergenceExplanation, viabilityCycleDisplay } from "../lib/convergenc
 import { peopleMapRows } from "../lib/evidenceAttribution";
 import { dependencyRelationships, MISSING_DEPENDENCY_NOTE } from "../lib/forceGraph";
 import { pipelineReading } from "../lib/pipelineReading";
-import { matrixFacing, recommendedMoveLine } from "../lib/reportMatrix";
+import { recommendedMoveLine, unifiedDealHeadline } from "../lib/reportMatrix";
 import { recoveryActionLines, uniqueRecoveryNotes } from "../lib/recoveryPlan";
 import { intentInputTrace, pinnedEquilibriumNote } from "../lib/scoreInputTrace";
 import { TRIGGER_ESTIMATE_NOTE, triggerLikelihood } from "../lib/triggerEstimate";
@@ -49,20 +49,28 @@ function CrmField({ label, value }: { label: string; value?: string }) {
   );
 }
 
+function forceStrengthLabel(weight: number): string {
+  if (weight < 25) return "Low";
+  if (weight < 55) return "Moderate";
+  if (weight < 80) return "Elevated";
+  return "High";
+}
+
 function ForceCard({ force }: { force: CausalForce }) {
   const border = forceTypeClass(force.type);
+  const strength = Math.max(0, Math.min(100, force.weight));
   return (
     <div className={`force-card force-${border}`}>
       <div className="force-header">
         <span className={`force-type force-type-${border}`}>{force.type}</span>
         <div className="force-meta">
           {force.role && <span className="force-role">{force.role}</span>}
-          <span className="force-weight">{force.weight}</span>
+          <span className="force-weight">{forceStrengthLabel(strength)}</span>
         </div>
       </div>
       <p className="force-factor">{force.factor}</p>
-      <div className="force-bar-track">
-        <div className="force-bar-fill" style={{ width: `${force.weight}%` }} />
+      <div className="force-bar-track" aria-hidden="true">
+        <div className="force-bar-fill" style={{ width: `${strength}%` }} />
       </div>
       {force.derived_from && force.derived_from.length > 0 && (
         <p className="force-derived">Derived from: {force.derived_from.join(", ")}</p>
@@ -74,18 +82,64 @@ function ForceCard({ force }: { force: CausalForce }) {
   );
 }
 
+function relativeBar(level: string): number {
+  const key = level.toLowerCase();
+  if (key.includes("high")) return 92;
+  if (key.includes("elevated")) return 72;
+  if (key.includes("moderate")) return 48;
+  if (key.includes("low")) return 22;
+  return 0;
+}
+
 function ScoreFactors({ explanation }: { explanation: ScoreExplanation }) {
+  const strengthLines: { label: string; level: string }[] = [];
+  const proseFactors: ScoreExplanation["factors"] = [];
+  for (const factor of explanation.factors) {
+    const parts = factor.text.split(/(?<=\.)\s+/).map((part) => part.trim()).filter(Boolean);
+    const levels = parts
+      .map((line) => {
+        const match = line.match(/^(.+?):\s*(low|moderate|elevated|high)\.?$/i);
+        return match ? { label: match[1].trim(), level: match[2].toLowerCase() } : null;
+      })
+      .filter((item): item is { label: string; level: string } => item != null);
+    if (levels.length && levels.length === parts.length) {
+      strengthLines.push(...levels);
+    } else {
+      proseFactors.push(factor);
+    }
+  }
+
   return (
     <div className="score-explanation">
       <h4 style={{ marginTop: "0.75rem" }}>{explanation.metric}</h4>
       <p className="meta-line">{explanation.summary}</p>
-      <ul className="restart-list">
-        {explanation.factors.map((factor) => (
-          <li key={factor.text}>
-            <strong>{factor.basis === "observed" ? "Observed" : "Inferred"}:</strong> {factor.text}
-          </li>
-        ))}
-      </ul>
+      {strengthLines.length > 0 && (
+        <ul className="risk-strength-list">
+          {strengthLines.map((item) => (
+            <li key={item.label}>
+              <div className="risk-strength-row">
+                <span>{item.label}</span>
+                <span className="risk-strength-level">{item.level}</span>
+              </div>
+              <div className="force-bar-track" aria-hidden="true">
+                <div
+                  className="force-bar-fill"
+                  style={{ width: `${relativeBar(item.level)}%` }}
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {proseFactors.length > 0 && (
+        <ul className="restart-list">
+          {proseFactors.map((factor) => (
+            <li key={factor.text}>
+              <strong>{factor.basis === "observed" ? "Observed" : "Inferred"}:</strong> {factor.text}
+            </li>
+          ))}
+        </ul>
+      )}
       <p className="meta-line">{explanation.caveat}</p>
     </div>
   );
@@ -137,13 +191,25 @@ export default function AnalysisReport({
   const tagClass = statusTagClass(String(dc.status));
   const blockerClass = blockerTagClass(init?.blocker_classification ?? "");
   const viabilityClass = viabilityTagClass(vs.state);
-  const facing = matrixFacing({
+  const blocked =
+    (r.stakeholders ?? []).find((s) =>
+      /absent decision maker/i.test(`${s.persona_type ?? ""} ${s.stance ?? ""}`)
+    )?.name ??
+    (r.stakeholders ?? []).find((s) =>
+      /hidden detractor|blocker/i.test(`${s.persona_type ?? ""} ${s.stance ?? ""}`)
+    )?.name ??
+    null;
+  const headline = unifiedDealHeadline({
     status: dc.status,
     trajectory: dt.trajectory_type,
     recoverabilityStatus: r.recoverability?.status,
     relevanceLabel: r.relevance?.label,
     transcript: r.source_transcript,
+    blockedOn: blocked,
+    viabilityState: vs.state,
+    recoverabilityScore: vs.viability_score,
   });
+  const facing = headline.facing;
   const trajectoryClass = facing.offForecast ? "status-failed" : trajectoryTagClass(dt.trajectory_type);
   const equilibriumClass = equilibriumTagClass(eq.state);
 
@@ -199,24 +265,16 @@ export default function AnalysisReport({
         <div className="full-analysis-body">
       <div className={`deal-status-banner ${tagClass}`}>
         <span className="deal-status-mode">Deterministic Scoring Engine</span>
-        <span className="deal-status-label">{facing.offForecast ? facing.categoryLabel : dc.status}</span>
+        <span className="deal-status-label">{headline.line}</span>
         <div className="score-row">
           {!facing.offForecast && (
           <span className={`confidence-score ${viabilityClass}`}>
-            {vs.state} — emergent {vs.viability_score}
+            Viability {vs.viability_score}
           </span>
           )}
           <span className={`confidence-score ${trajectoryClass}`}>
-            Trajectory: {facing.trajectoryLabel}
+            {facing.trajectoryLabel}
           </span>
-          <span className={`confidence-score ${equilibriumClass}`}>
-            Equilibrium: {equilibriumLabel(eq.state)}
-          </span>
-          {cycles && cycles.total_cycles > 0 && (
-            <span className="confidence-score">
-              {cycles.total_cycles} cycles · {cycles.convergence_status}
-            </span>
-          )}
           {init?.blocker_classification && (
             <span className={`confidence-score ${blockerClass}`}>
               {init.blocker_classification}
@@ -773,7 +831,9 @@ export default function AnalysisReport({
         <article className="card card-neutral">
           <h2 className="card-title">Proprietary Risk Compiler</h2>
           <div className="card-body">
-            <p className="meta-line">{pi.formula}</p>
+            <p className="meta-line">
+              Deal Risk Index {pi.deal_risk_index} ({pi.risk_tier}). Component strength below — internal weights are not shown.
+            </p>
             {pi.explanations && (
               <>
                 <ScoreFactors explanation={pi.explanations.viability} />

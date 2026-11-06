@@ -13,7 +13,7 @@ import { statusFromTrajectory, assertAnalysisSchema } from "../server/gemini.ts"
 import { alignBlockerNarrative } from "../src/lib/blockerNarrative.ts";
 import { commercialBaselineFromText, presentCommercialBaseline } from "../src/lib/commercialBaseline.ts";
 import { DEFER_FORECAST_LINE, forecastGuidance, NON_VIABLE_FORECAST_LINE, NOT_A_PURCHASE_FORECAST_LINE } from "../src/lib/forecastCall.ts";
-import { canonicalImmediateActions, classifyRecoverability, classifyRisk, diagnosticProfile, explicitClientRefusal, extractPromisedDeliverable, matrixFacing, parseTurns, promisedRelationshipSteps, publishesStallMetrics, purchaseMotion, recommendedMoveLine, reportCategory, stalledHeadline, validateReportMatrix } from "../src/lib/reportMatrix.ts";
+import { canonicalImmediateActions, classifyRecoverability, classifyRisk, diagnosticProfile, explicitClientRefusal, extractPromisedDeliverable, matrixFacing, parseTurns, promisedRelationshipSteps, publishesStallMetrics, purchaseMotion, recommendedMoveLine, reportCategory, sanitizeTranscriptForDisplay, stalledHeadline, unifiedDealHeadline, validateReportMatrix } from "../src/lib/reportMatrix.ts";
 import { formatCompressedCrmNotes } from "../src/lib/crmNotes.ts";
 import { mergeOverlappingQuotes } from "../src/lib/evidenceQuotes.ts";
 import { lifecycleDelta, lifecyclePhaseFromStatus, presentLifecycleRun, presentThreadImprovement, publishesLifecycleScores, scoreMovement } from "../server/meDeals.ts";
@@ -1657,13 +1657,65 @@ if (
   !/referral relationship/i.test(referralDiag.buyingSignals) ||
   !referralDiag.budget.startsWith("Consultation budget was not qualified") ||
   !/not as this person's ability or willingness to pay/i.test(referralDiag.budget) ||
-  !referralDiag.urgency.startsWith("MISSING — NO TIMELINE") ||
-  !/calendar time/i.test(referralDiag.missedProcess) ||
+  referralDiag.urgency !== "not stated" ||
+  !/no follow-up action was agreed/i.test(referralDiag.missedProcess) ||
   !/not evidence that a sale was lost/i.test(referralDiag.missedProcess) ||
   /500,000|\$1 million|Budget was discussed|Budget was qualified/i.test(referralDiag.budget) ||
   /partnership meeting|CRITICAL/i.test(JSON.stringify(referralDiag))
 ) {
   console.error("FAIL: A referral close still reports the missing qualification", referralDiag);
+  failed = true;
+}
+const headerDump = [
+  "=== MANUAL TRANSCRIPT ===",
+  "Source: upload_notes.txt",
+  "Date: 2024-03-01",
+  "Participants: Alex, Jordan",
+  "Alex: We like the product.",
+  "Jordan: Happy to send a proposal next week.",
+].join("\n");
+const sanitizedHeader = sanitizeTranscriptForDisplay(headerDump);
+if (
+  /MANUAL TRANSCRIPT|Source:|Participants:/i.test(sanitizedHeader) ||
+  !/^Alex:/m.test(sanitizedHeader)
+) {
+  console.error("FAIL: Transcript sanitizer must start at the first speaker turn", sanitizedHeader);
+  failed = true;
+}
+const noTimelineDiag = diagnosticProfile(
+  ["BUYER: We like what we saw.", "SELLER: Great — I will send a link.", "BUYER: Sounds good."].join("\n")
+);
+if (noTimelineDiag.urgency !== "not stated") {
+  console.error("FAIL: Urgency without a hard timeline must be exactly not stated", noTimelineDiag.urgency);
+  failed = true;
+}
+const stalledHeadlineLine = unifiedDealHeadline({
+  status: "STALLED — HIGH RISK",
+  trajectory: "DEFERRED (recoverable)",
+  recoverabilityStatus: "RECOVERABLE",
+  blockedOn: "Dave",
+  recoverabilityScore: 40,
+}).line;
+if (
+  !/^Stalled and recoverable,/i.test(stalledHeadlineLine) ||
+  !/blocked on Dave/i.test(stalledHeadlineLine)
+) {
+  console.error("FAIL: Unified headline must consolidate status/recoverability/forecast", stalledHeadlineLine);
+  failed = true;
+}
+const absentOnlyDispersion = computeStakeholderDispersion([
+  {
+    name: "Richard",
+    persona_type: "Absent Decision Maker",
+    role: "CFO",
+    evidence: "Richard is not on this call",
+  },
+]);
+if (absentOnlyDispersion.index > 18) {
+  console.error(
+    "FAIL: A single absent decision maker must not dominate dispersion",
+    absentOnlyDispersion.index
+  );
   failed = true;
 }
 const wrappedRefusal = diagnosticProfile(
@@ -1719,7 +1771,8 @@ const sarahDiag = diagnosticProfile(sarahMarkTranscript);
 if (
   sarahDiag.budget.startsWith("MISSING") ||
   !/qualified for this purchase/i.test(sarahDiag.budget) ||
-  sarahDiag.urgency.startsWith("MISSING") ||
+  sarahDiag.urgency === "not stated" ||
+  !/timeline was stated/i.test(sarahDiag.urgency) ||
   /did not secure a decision/i.test(sarahDiag.missedProcess) ||
   !/interest in this purchase/i.test(sarahDiag.buyingSignals)
 ) {

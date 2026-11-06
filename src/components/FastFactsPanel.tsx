@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { recoveryActionLines } from "../lib/recoveryPlan";
-import { canonicalImmediateActions, matrixFacing } from "../lib/reportMatrix";
-import { forecastGuidance } from "../lib/forecastCall";
+import { canonicalImmediateActions, unifiedDealHeadline } from "../lib/reportMatrix";
 import { formatCompressedCrmNotes } from "../lib/crmNotes";
 import { PostMortemResult, StakeholderSignal } from "../types";
 
@@ -64,20 +63,19 @@ export default function FastFactsPanel({
   const [pushError, setPushError] = useState<string | null>(null);
 
   const status = result.deal_classification?.status ?? "UNKNOWN";
-  const facing = matrixFacing({
+  const absent = absentPeople(result)[0];
+  const veto = opposing(result)[0];
+  const headline = unifiedDealHeadline({
     status,
     trajectory: result.deal_trajectory?.trajectory_type,
     recoverabilityStatus: result.recoverability?.status,
     relevanceLabel: result.relevance?.label,
     transcript: result.source_transcript,
-  });
-  const trajectory = result.deal_trajectory?.trajectory_type ?? "";
-  const guidance = forecastGuidance({
-    status: facing.category === "unresolved" ? "MOTION NOT ESTABLISHED" : facing.offForecast ? "NOT A PURCHASE" : status,
-    trajectory,
-    recoverability: result.recoverability_score ?? result.viability_state?.viability_score,
+    blockedOn: absent?.name ?? veto?.name ?? null,
     viabilityState: result.viability_state?.state,
+    recoverabilityScore: result.recoverability_score ?? result.viability_state?.viability_score,
   });
+  const facing = headline.facing;
   const blocker = coreBlocker(result);
   const vetoPeople = opposing(result);
   const missingPeople = absentPeople(result);
@@ -125,8 +123,8 @@ export default function FastFactsPanel({
       <article className="card card-amber concise-card fast-facts-card">
         <h2 className="card-title">What this deal is</h2>
         <div className="card-body">
-          <p className="fast-facts-status">{facing.offForecast ? facing.categoryLabel : status}</p>
-          <p>{guidance.line}</p>
+          <p className="fast-facts-status">{headline.line}</p>
+          <p>{headline.forecastLine}</p>
           <p>
             <strong>Core blocker:</strong> {blocker}
           </p>
@@ -188,8 +186,8 @@ export default function FastFactsPanel({
       <article className="card card-emerald concise-card fast-facts-card">
         <h2 className="card-title">CRM-ready next step</h2>
         <div className="card-body">
-          <p>{guidance.line}</p>
-          {!guidance.showRecoveryPlan ? (
+          <p>{headline.forecastLine}</p>
+          {!headline.showRecoveryPlan ? (
             <p>No action is proposed until the blocking condition itself changes.</p>
           ) : saveSteps.length === 0 ? (
             <p>No immediate action was identified from the evidence.</p>

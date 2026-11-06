@@ -208,30 +208,39 @@ export function calculateDRI(telemetry: RefinedDealInputPayload): EngineMatrixDe
     unanswered
   );
 
+  const signalCap = GlobalParameters.maxSingleSignalContribution;
+
   // 1. Stage volatility Z-score & Δ velocity
   const zStall = Math.max(0, (tStalled - muStage) / sigmaStage);
-  const deltaVelocity =
-    100 * (1 - Math.exp(-GlobalParameters.lambda * zStall));
+  const deltaVelocity = Math.min(
+    signalCap,
+    100 * (1 - Math.exp(-GlobalParameters.lambda * zStall))
+  );
 
   // 2. Touchpoint entropy Φ
-  const phiEntropy =
-    GlobalParameters.beta *
-    (1 - Math.exp(-GlobalParameters.alpha * unanswered));
+  const phiEntropy = Math.min(
+    signalCap,
+    GlobalParameters.beta * (1 - Math.exp(-GlobalParameters.alpha * unanswered))
+  );
 
   // 3. Sentiment memory decay Ψ
   const psiBase = SentimentBaseWeights[sentiment] ?? SentimentBaseWeights.GHOSTING;
-  const psiSentiment =
-    psiBase * Math.exp(-(Math.LN2 / GlobalParameters.tau) * deltaT);
+  const psiSentiment = Math.min(
+    signalCap,
+    psiBase * Math.exp(-(Math.LN2 / GlobalParameters.tau) * deltaT)
+  );
 
-  // 4. Stakeholder authority Γ = 15 * (Σ W_risk / Σ W_all)
+  // 4. Stakeholder authority Γ = gammaScale * (Σ W_risk / Σ W_all)
   const riskWeightSum = stakeholders
     .filter((s) => isRiskRole(s.role))
     .reduce((acc, s) => acc + roleWeight(s), 0);
   const allWeightSum = stakeholders.reduce((acc, s) => acc + roleWeight(s), 0);
-  const gammaStakeholder =
+  const gammaStakeholder = Math.min(
+    signalCap,
     allWeightSum > 0
       ? GlobalParameters.gammaScale * (riskWeightSum / allWeightSum)
-      : 0;
+      : 0
+  );
 
   const rawDri = deltaVelocity + phiEntropy + psiSentiment + gammaStakeholder;
   const riskIndex = Math.min(100, Math.max(0, Math.round(rawDri)));

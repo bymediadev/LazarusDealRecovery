@@ -103,7 +103,7 @@ export default function DealHeaderMetrics({
           value={formatScoreOutOf100(viabilityScore)}
           detail={
             [
-              "The viability formula. A zero is the floor of that formula, not a recoverability judgment.",
+              "Whether a credible path to advance still exists. A zero is the floor of that judgment, not proof that recovery is impossible.",
               intermediateViability !== undefined &&
               viabilityScore !== undefined &&
               intermediateViability !== viabilityScore

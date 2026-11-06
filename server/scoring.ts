@@ -16,7 +16,6 @@ import {
 } from "../src/lib/reportMatrix.js";
 
 export { isNotAPurchase, isSellerIntroduction, isSoleOperator } from "../src/lib/reportMatrix.js";
-import { intentInputTrace } from "../src/lib/scoreInputTrace.js";
 import { formatDriFormula, telemetryFromAnalysis } from "./engine/driBridge.js";
 
 export type CanonicalEquilibrium = "PINNED" | "MIXED" | "OPEN";
@@ -968,12 +967,15 @@ export interface ProprietaryIndices {
   explanations: ScoreExplanations;
 }
 
+/** Persona contributions to dispersion. Positive weights are capped per person (see MAX_PERSONA_SIGNAL). */
 const PERSONA_WEIGHTS: Record<string, number> = {
-  "absent decision maker": 28,
+  "absent decision maker": 18,
   "hidden detractor": 24,
   "suppressed champion": 12,
   "aligned champion": -8,
 };
+/** No single persona type may contribute more than this to the dispersion index. */
+const MAX_PERSONA_SIGNAL = 18;
 
 const DEFERRAL_PHRASES = [
   "i'll check",
@@ -1190,7 +1192,8 @@ export function computeStakeholderDispersion(
     const persona = normalizePersona(s, transcript);
     persona_breakdown[persona] = (persona_breakdown[persona] ?? 0) + 1;
     const weight = PERSONA_WEIGHTS[persona] ?? 0;
-    raw += weight;
+    // Cap each positive persona hit so one absent decision maker cannot dominate the index alone.
+    raw += weight > 0 ? Math.min(weight, MAX_PERSONA_SIGNAL) : weight;
     if (persona === "absent decision maker") {
       flags.push(`Absent decision maker: ${s.name}`);
     }
@@ -1448,6 +1451,29 @@ function viabilityPathSentence(frozen: FrozenDerivation, blocker: string): strin
   return "Default path: viability is effective intent plus timing, minus the larger of structural lock-in and constraint pressure.";
 }
 
+function qualitativeLevel(value: number, cap = 42): string {
+  const ratio = Math.max(0, Math.min(1, value / Math.max(1, cap)));
+  if (ratio < 0.25) return "low";
+  if (ratio < 0.55) return "moderate";
+  if (ratio < 0.8) return "elevated";
+  return "high";
+}
+
+/** Customer-facing strength summary — no raw multipliers or greek equation. */
+function qualitativeRiskStrength(breakdown: {
+  deltaVelocity: number;
+  phiEntropy: number;
+  psiSentiment: number;
+  gammaStakeholder: number;
+}): string {
+  return [
+    `Stage velocity pressure: ${qualitativeLevel(breakdown.deltaVelocity)}`,
+    `Unanswered-touch entropy: ${qualitativeLevel(breakdown.phiEntropy)}`,
+    `Sentiment memory: ${qualitativeLevel(breakdown.psiSentiment)}`,
+    `Stakeholder authority pressure: ${qualitativeLevel(breakdown.gammaStakeholder)}`,
+  ].join(". ") + ".";
+}
+
 /** Plain-language account of the scores already computed. Does not change the numbers. */
 export function explainScores(
   frozen: FrozenDerivation,
@@ -1471,19 +1497,18 @@ export function explainScores(
       factors: [
         {
           basis: "observed",
-          text: `Intent ${frozen.intent_strength}, constraint ${frozen.constraint_pressure}, structural lock-in ${frozen.structural_lock_in}, enabler ${frozen.enabler_strength}, timing ${frozen.timing_factor}. Those weights come from the extracted forces.`,
+          text: `Intent ${qualitativeLevel(frozen.intent_strength, 100)}, constraint ${qualitativeLevel(frozen.constraint_pressure, 100)}, structural lock-in ${qualitativeLevel(frozen.structural_lock_in, 100)}, enabler ${qualitativeLevel(frozen.enabler_strength, 100)}, timing ${qualitativeLevel(frozen.timing_factor, 20)}. Those levels come from the extracted forces.`,
         },
         {
           basis: "inferred",
-          text: intentInputTrace(
-            frozen.intent_strength,
-            frozen.constraint_pressure,
-            frozen.effective_intent
-          ),
+          text:
+            frozen.intent_strength === 0
+              ? "Effective intent is low because no Intent force was extracted. That is not a finding that the buyer has no interest."
+              : "Effective intent reflects the strongest Intent force, reduced when constraint pressure is high. It is separate from the ability to get approval.",
         },
         {
           basis: "inferred",
-          text: `${viabilityPathSentence(frozen, blocker)} Effective intent is ${frozen.effective_intent}. Trajectory: ${frozen.trajectory_type}. State: ${frozen.viability_state}.`,
+          text: `${viabilityPathSentence(frozen, blocker)} Trajectory: ${frozen.trajectory_type}. State: ${frozen.viability_state}.`,
         },
         ...(frozen.force_trace.length
           ? [
@@ -1499,22 +1524,22 @@ export function explainScores(
         },
       ],
       caveat:
-        "Stakeholder access changes this score only when it is already inside the constraint, structural, or enabler weights. A missing fact is not given a weight.",
+        "Stakeholder access changes this score only when it is already inside the constraint, structural, or enabler forces. A missing fact is not scored as resistance.",
     },
     deal_risk: {
       metric: "Deal Risk Index",
       summary:
-        "Non-linear risk from stage velocity decay (Δ), unanswered-touch entropy (Φ), sentiment memory (Ψ), and stakeholder authority (Γ). Not a close probability.",
+        "Composite risk from stage velocity, unanswered-touch entropy, sentiment memory, and stakeholder authority. Not a close probability. No single signal can alone force a critical rating.",
       factors: [
         {
           basis: "inferred",
-          text: formatDriFormula(
-            telemetryFromAnalysis(frozen, stakeholders, stall)
+          text: qualitativeRiskStrength(
+            telemetryFromAnalysis(frozen, stakeholders, stall).breakdown
           ),
         },
         {
           basis: "inferred",
-          text: `Telemetry drawn from timing ${frozen.timing_factor}, constraint ${frozen.constraint_pressure}, stall score ${stall.score}, and mapped stakeholders. Force Interaction supplies evidence; the matrix writes the score.`,
+          text: "Telemetry is drawn from timing, constraint pressure, stall patterns, and the mapped stakeholder list. Force Interaction supplies evidence; the risk matrix writes the score.",
         },
       ],
       caveat:
@@ -1523,16 +1548,16 @@ export function explainScores(
     department_friction: {
       metric: "Department Friction Index",
       summary:
-        "A count of department words in the stakeholder text, plus 12 when an absent decision maker is mapped. A word match is not resistance.",
+        "A count of department words in the stakeholder text, with a modest bump when an absent decision maker is mapped. A word match is not resistance.",
       factors: [
         {
           basis: "observed",
-          text: `Department words matched on word boundaries in role, evidence, or name: ${departmentList}. Each distinct word adds 14. A sole owner's description of their own trade is not counted.`,
+          text: `Department words matched on word boundaries in role, evidence, or name: ${departmentList}. A sole owner's description of their own trade is not counted.`,
         },
         {
           basis: "inferred",
           text: dispersion.absence_term_applied
-            ? "An absent decision maker adds 12. That term is not evidence that Legal, Security, or a peer is opposing the deal."
+            ? "An absent decision maker adds a capped term. That term is not evidence that Legal, Security, or a peer is opposing the deal."
             : "The absent-decision-maker term was not applied.",
         },
       ],
@@ -1554,7 +1579,7 @@ export function explainScores(
         },
         {
           basis: "inferred",
-          text: `Persona weights are fixed: absent decision maker +28, hidden detractor +24, suppressed champion +12, aligned champion −8. Unmet conditions, resource limits, inactivity, and competitive preference add 0. Department friction (${dispersion.multi_department_friction}) is reported separately and is not added to this index. Authority gap: ${dispersion.authority_gap}.`,
+          text: `Absent decision makers and hidden detractors raise dispersion; aligned champions lower it. Unmet conditions, resource limits, inactivity, and competitive preference add none. Department friction is reported separately. Authority gap: ${dispersion.authority_gap}. Each persona hit is capped so one absent decision maker cannot dominate the index.`,
         },
       ],
       caveat:

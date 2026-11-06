@@ -2,11 +2,21 @@ import ViabilityLineChart from "./ViabilityLineChart";
 import { readConstraint } from "../lib/constraintReading";
 import { mergeOverlappingQuotes } from "../lib/evidenceQuotes";
 import { presentCommercialBaseline } from "../lib/commercialBaseline";
-import { forecastGuidance } from "../lib/forecastCall";
-import { canonicalImmediateActions, formatRecoverability, matrixFacing } from "../lib/reportMatrix";
+import { canonicalImmediateActions, unifiedDealHeadline } from "../lib/reportMatrix";
 import { convergenceExplanation, viabilityCycleDisplay } from "../lib/convergenceNote";
 import { recoveryActionLines } from "../lib/recoveryPlan";
 import type { PostMortemResult } from "../types";
+
+function blockedOnName(result: PostMortemResult): string | null {
+  const absent = (result.stakeholders ?? []).find((s) =>
+    /absent decision maker/i.test(`${s.persona_type ?? ""} ${s.stance ?? ""}`)
+  );
+  if (absent?.name) return absent.name;
+  const veto = (result.stakeholders ?? []).find((s) =>
+    /hidden detractor|blocker/i.test(`${s.persona_type ?? ""} ${s.stance ?? ""}`)
+  );
+  return veto?.name?.trim() || null;
+}
 
 interface Props {
   result: PostMortemResult;
@@ -94,26 +104,18 @@ export default function ExecutiveBrief({ result }: Props) {
     ...(result.stakeholders ?? []).map((person) => `${person.name} ${person.role ?? ""} ${person.evidence}`),
   ].join("\n");
   const constraint = readConstraint(constraintText);
-  const facing = matrixFacing({
+  const headline = unifiedDealHeadline({
     status: typeof status === "string" ? status : undefined,
     trajectory: result.deal_trajectory?.trajectory_type,
     recoverabilityStatus: result.recoverability?.status,
     relevanceLabel: result.relevance?.label,
     transcript: result.source_transcript,
-  });
-  const guidance = forecastGuidance({
-    status: facing.category === "unresolved"
-      ? "MOTION NOT ESTABLISHED"
-      : facing.offForecast
-        ? "NOT A PURCHASE"
-        : typeof status === "string"
-          ? status
-          : undefined,
-    trajectory: result.deal_trajectory?.trajectory_type,
-    recoverability: viability,
+    blockedOn: blockedOnName(result),
     viabilityState: result.viability_state?.state,
+    recoverabilityScore: viability,
   });
-  const steps = guidance.showRecoveryPlan ? canonicalImmediateActions(result) : [];
+  const facing = headline.facing;
+  const steps = headline.showRecoveryPlan ? canonicalImmediateActions(result) : [];
   const cycleRows = result.resolution_cycles?.cycles ?? [];
   const viabilityDisplay = viabilityCycleDisplay(cycleRows, viability);
   const convergence = convergenceExplanation({
@@ -142,7 +144,7 @@ export default function ExecutiveBrief({ result }: Props) {
       )}
 
       <div className="executive-brief-status">
-        <p className="executive-brief-status-label">Current Status: {facing.offForecast ? facing.categoryLabel : status}</p>
+        <p className="executive-brief-status-label">{headline.line}</p>
         <p className="executive-brief-commercial">Commercial Baseline: {baselineParts.filter(Boolean).join(" | ")}</p>
         {(baseline.context ?? []).map((item) => (
           <p key={`${item.kind}-${item.label}`} className="meta-line">
@@ -150,23 +152,14 @@ export default function ExecutiveBrief({ result }: Props) {
           </p>
         ))}
         <p className="executive-brief-status-metrics">
-          {!facing.offForecast && viabilityDisplay.intermediate !== null && (
-            <span>Cycle 1 intermediate: {viabilityDisplay.intermediate}</span>
-          )}
-          {!facing.offForecast && viability !== undefined && <span>Final derived viability: {viability}</span>}
+          {!facing.offForecast && viability !== undefined && <span>Viability: {viability}</span>}
           {!facing.offForecast && risk !== undefined && (
             <span>
               Deal Risk Index: {risk}
               {riskLabel ? ` (${riskLabel})` : ""}
             </span>
           )}
-          {result.recoverability && (
-            <span>Recoverability: {facing.recoverabilityLabel || formatRecoverability(result.recoverability.status)}</span>
-          )}
         </p>
-        {result.recoverability?.explanation && (
-          <p className="meta-line">{result.recoverability.explanation}</p>
-        )}
         {!facing.offForecast && viabilityDisplay.note && <p className="meta-line">{viabilityDisplay.note}</p>}
         {convergence && <p className="meta-line">{convergence}</p>}
         {result.report_validation && !result.report_validation.passed && (
@@ -270,8 +263,8 @@ export default function ExecutiveBrief({ result }: Props) {
 
       <div className="executive-brief-actions">
         <h2>{facing.planTitle}</h2>
-        <p>{guidance.line}</p>
-        {!guidance.showRecoveryPlan ? (
+        <p>{headline.forecastLine}</p>
+        {!headline.showRecoveryPlan ? (
           <p>No action is proposed until the blocking condition itself changes.</p>
         ) : steps.length === 0 ? (
           <p>No immediate action was identified from the evidence.</p>

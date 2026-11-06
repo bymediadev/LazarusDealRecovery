@@ -1,5 +1,6 @@
 import { uniqueActionSteps } from "./actionSteps";
 import { capacitySubject, samePerson } from "./evidenceAttribution";
+import { forecastGuidance } from "./forecastCall";
 import { formatRecoveryAction, uniqueRecoveryNotes } from "./recoveryPlan";
 
 /** One threshold table for every transcript. Headline, scorecard, and notes read this tier. */
@@ -167,6 +168,38 @@ function sellerLabel(name: string, sellers: Set<string>): boolean {
 const HEADER_LINE = /^(?:transcript|transc\w*ipt|date|speakers|scenario|participants|context|overview)\s*:/i;
 const SKIP_SPEAKER =
   /^(?:from|to|subject|cc|bcc|stage|status|deal status|closed won|closed lost|scenario|participants|context|overview)\b/i;
+/** Section banners and stitch markers that must never appear in "What was said". */
+const TRANSCRIPT_METADATA_LINE =
+  /^(?:=+[^=].*=+|---+.*|#{1,6}\s+\S+|\[?(?:AUDIO|MANUAL|EMAIL|DOCUMENT|FIELD|LIVE|CALL|PRIOR)\b[^\n]{0,80}(?:TRANSCRIPT|THREAD|CAPTURE|NOTES?|SESSION)?\]?|\*\*[^*]{0,80}\*\*|Source(?: timing)?:\s*\S)/i;
+
+/**
+ * Drop every line above the first labeled speaker turn, and drop stitch/header banners.
+ * Pure display/filter step — does not change model extraction prompts.
+ */
+export function sanitizeTranscriptForDisplay(transcript: string): string {
+  const expanded = expandSpeakerBreaks(transcript ?? "");
+  const lines = expanded.split(/\n/);
+  let firstSpeaker = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].replace(/\r$/, "").replace(/\*+/g, "").trim();
+    if (!line || HEADER_LINE.test(line) || TRANSCRIPT_METADATA_LINE.test(line)) continue;
+    if (/^\s*(?:\[[^\]]+\]\s*)?[A-Za-z][A-Za-z0-9 .'/()-]{0,60}?\s*:\s*\S/.test(line)) {
+      firstSpeaker = i;
+      break;
+    }
+  }
+  const from = firstSpeaker === -1 ? 0 : firstSpeaker;
+  return lines
+    .slice(from)
+    .filter((raw) => {
+      const line = raw.replace(/\r$/, "").replace(/\*+/g, "").trim();
+      if (!line) return false;
+      if (HEADER_LINE.test(line) || TRANSCRIPT_METADATA_LINE.test(line)) return false;
+      if (/^(closed won|closed lost)$/i.test(line)) return false;
+      return true;
+    })
+    .join("\n");
+}
 
 function expandSpeakerBreaks(transcript: string): string {
   let text = transcript.replace(/\r/g, "");
@@ -182,13 +215,14 @@ function expandSpeakerBreaks(transcript: string): string {
 /** Split a labeled transcript into speaker turns. Continuation lines stay with the current speaker. */
 export function parseTurns(transcript: string): { labeled: boolean; turns: TranscriptTurn[] } {
   const turns: TranscriptTurn[] = [];
-  const expanded = expandSpeakerBreaks(transcript ?? "");
-  const sellers = sellersFromHeader(expanded);
+  const cleaned = sanitizeTranscriptForDisplay(transcript ?? "");
+  const expanded = expandSpeakerBreaks(cleaned);
+  const sellers = sellersFromHeader(expandSpeakerBreaks(transcript ?? ""));
   let labeled = false;
   let current: TranscriptTurn | null = null;
   for (const rawLine of expanded.split(/\n/)) {
     const line = rawLine.replace(/\r$/, "").replace(/\*+/g, "");
-    if (HEADER_LINE.test(line)) continue;
+    if (HEADER_LINE.test(line) || TRANSCRIPT_METADATA_LINE.test(line.trim())) continue;
     if (/^(closed won|closed lost)$/i.test(line.trim())) continue;
     // Role headers are not dialogue turns: "Marcus Reed — Sales Representative"
     if (/^[A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,2}\s*[–—-]\s+\S/.test(line.trim())) continue;
@@ -533,13 +567,53 @@ const QUALIFIED_PAY = /\$[\d,]+|\b\d+\s*k\b|\bin range\b|\bmodeled\b|\bour budge
 const UNQUALIFIED_BUDGET = /\b(?:do not|don't|dont) have the budget\b|\bno budget for\b|\byou (?:do not|don't) have the budget\b/i;
 const REVENUE_BAND = /\b(revenue|annually|doing about)\b/i;
 const PAID_WITHOUT_AMOUNT = /\b(not free|paid consultation|paid diagnostic|clarity consultation)\b/i;
-const URGENCY =
-  /\b(q[1-4]|this quarter|next quarter|month-end|next week|deadline|urgent|as soon as|underwater until|after month-end|annual planning(?: cycle)?|(?:a |about |in about )?(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)(?:\s*-\s*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten))?\s*(?:day|days|week|weeks|month|months)(?!\s+ago)(?:\s+(?:workflow )?assessment|\s+organizational review|\s+planning(?: cycle)?)?)\b/i;
+/**
+ * Hard timeline for Urgency citations only: calendar date, quarter, milestone, or explicit horizon.
+ * Capacity metaphors like "underwater until month-end" are excluded — they are not purchase urgency.
+ */
+const HARD_TIMELINE =
+  /\b(q[1-4]|this quarter|next quarter|end of (?:the )?(?:month|quarter|year)|month-end|after month-end|next week|next month|deadline|by\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)|annual planning(?: cycle)?|(?:a |about |in about |within )?(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)(?:\s*-\s*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten))?\s*(?:day|days|week|weeks|month|months)(?!\s+ago)(?:\s+(?:workflow )?assessment|\s+organizational review|\s+planning(?: cycle)?)?)\b/i;
+const CAPACITY_METAPHOR = /\bunderwater until\b|\bswamped until\b|\bburied until\b/i;
+const DEAL_HORIZON =
+  /\b(parked until|until q[1-4]|close (?:by|this|next)|accelerate|move(?:d)? forward|this quarter|next quarter|q[1-4])\b/i;
+/** Legacy alias used by unknownBits — same hard timeline rule. */
+const URGENCY = HARD_TIMELINE;
 const PAID_OFFER = /\b(clarity consultation|not free|paid consultation|paid diagnostic|send you (?:a |the )?link)\b/i;
 const CALENDAR_STEP =
-  /\b(reschedul\w*|three slots|book(?:ed|ing)?\s+(?:a |the )?time|schedule(?:d)?\s+(?:a |the )?(?:time|meeting)|lock(?:ed)?\s+(?:a |the )?(?:time|date)|put (?:a )?time on (?:the )?calendar)\b/i;
+  /\b(reschedul\w*|three slots|book(?:ed|ing)?\s+(?:a |the )?time|schedule(?:d)?\s+(?:a |the )?(?:time|meeting)|lock(?:ed)?\s+(?:a |the )?(?:time|date)|put (?:a )?time on (?:the )?calendar|follow[- ]?up|next step|send (?:an |the )?invite)\b/i;
+const FOLLOW_UP_AGREED =
+  /\b(do that|yes[,.]?(?:\s|$)|let'?s do|sounds good|works for me|that works|go ahead|please do|i(?:'ll| will) take that)\b/i;
 const PURCHASE_INTEREST =
   /\b(i like what i saw|in range|we can accelerate|move(?:d)? forward|send (?:me )?a proposal)\b/i;
+
+/** First hard-timeline sentence that is not a capacity metaphor; prefer deal-horizon lines. */
+function urgencyEvidenceLine(buyerText: string): string {
+  const text = asProse(buyerText);
+  if (!text.trim()) return "";
+  const matches: { sentence: string; deal: boolean }[] = [];
+  const re = new RegExp(HARD_TIMELINE.source, "gi");
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    const sentence = sentenceAt(text, match.index, match[0].length);
+    if (!sentence || CAPACITY_METAPHOR.test(sentence)) continue;
+    if (!HARD_TIMELINE.test(sentence)) continue;
+    matches.push({ sentence, deal: DEAL_HORIZON.test(sentence) });
+  }
+  if (!matches.length) return "";
+  const preferred = matches.find((item) => item.deal) ?? matches[0];
+  return preferred.sentence;
+}
+
+/** True only when a follow-up/next step was proposed and the buyer accepted it. */
+function followUpProposedAndAgreed(transcript: string): boolean {
+  const parsed = parseTurns(transcript);
+  const buyer = asProse(turnsText(parsed.turns, "buyer"));
+  const seller = asProse(turnsText(parsed.turns, "seller"));
+  const proposed = CALENDAR_STEP.test(seller) || CALENDAR_STEP.test(buyer);
+  if (!proposed) return false;
+  if (CALENDAR_STEP.test(buyer) && FOLLOW_UP_AGREED.test(buyer)) return true;
+  return CALENDAR_STEP.test(seller) && FOLLOW_UP_AGREED.test(buyer);
+}
 
 function asProse(transcript: string): string {
   return transcript.replace(/[ \t]*\n[ \t]*/g, " ");
@@ -593,10 +667,30 @@ function defenseLines(transcript: string, motion: PurchaseMotion): Pick<
   const parsed = parseTurns(transcript);
   const buyer = asProse(turnsText(parsed.turns, "buyer"));
   const seller = asProse(turnsText(parsed.turns, "seller"));
-  const said = parsed.turns
-    .filter((turn) => turn.text)
-    .slice(0, 4)
-    .map((turn) => `${turn.speaker || "Speaker"}: ${turn.text.replace(/\s+/g, " ").trim()}`);
+  const evidenceAnchors = [
+    urgencyEvidenceLine(buyer),
+    sentenceAround(buyer, PURCHASE_INTEREST),
+    sentenceAround(buyer, QUALIFIED_PAY),
+    sentenceAround(buyer, HARD_TIMELINE),
+    sentenceAround(buyer, FOLLOW_UP_AGREED),
+    sentenceAround(seller, CALENDAR_STEP),
+  ]
+    .filter(Boolean)
+    .map((line) => line.toLowerCase());
+  const labeledTurns = parsed.turns.filter(
+    (turn) =>
+      turn.speaker &&
+      turn.role !== "unknown" &&
+      turn.text.trim() &&
+      !TRANSCRIPT_METADATA_LINE.test(turn.text.trim())
+  );
+  const cited = labeledTurns.filter((turn) =>
+    evidenceAnchors.some((anchor) => turn.text.toLowerCase().includes(anchor.slice(0, 48)))
+  );
+  // Strict: only speaker turns that carry cited evidence — never dump the full transcript.
+  const said = cited.slice(0, 4).map(
+    (turn) => `${turn.speaker}: ${turn.text.replace(/\s+/g, " ").trim()}`
+  );
   const happyEars =
     /\bclosed[-\s]?won\b/i.test(seller) && /\b(nothing is signed|not done|we(?:'re| are) evaluating)\b/i.test(buyer);
   const speakersKnown = parsed.labeled;
@@ -816,7 +910,7 @@ export function diagnosticProfile(transcript: string): DiagnosticProfile {
   const notAPurchase = motion.motion === "not_a_deal";
   const buyer = buyerLines(text);
   const budgetReadout = budgetRead(text);
-  const urgencyHit = sentenceAround(buyer, URGENCY);
+  const urgencyHit = urgencyEvidenceLine(buyer);
   const interestHit = sentenceAround(buyer, PURCHASE_INTEREST);
   const refusalHit = sentenceAround(
     text,
@@ -845,19 +939,24 @@ export function diagnosticProfile(transcript: string): DiagnosticProfile {
 
   const urgency = urgencyHit
     ? `A timeline was stated. Evidence: "${urgencyHit}"`
-    : "MISSING — NO TIMELINE OR URGENCY ESTABLISHED";
+    : "not stated";
 
-  const met = meetingSet(text);
+  const followUpAgreed = followUpProposedAndAgreed(text);
+  const followUpProposed =
+    CALENDAR_STEP.test(asProse(turnsText(parseTurns(text).turns, "seller"))) ||
+    CALENDAR_STEP.test(buyer);
   const missedProcess =
-    notAPurchase && PAID_OFFER.test(text) && !met
-      ? "The seller introduced a paid consultation before confirming it was relevant. No decision or calendar time was secured. This is not evidence that a sale was lost."
-      : PAID_OFFER.test(text) && !met
-        ? "The seller introduced a paid consultation and did not secure a decision or a calendar time. The next step left on the call was a link, not a meeting."
+    notAPurchase && PAID_OFFER.test(text) && !followUpAgreed
+      ? "The seller introduced a paid consultation before confirming it was relevant. No follow-up action was agreed. This is not evidence that a sale was lost."
+      : PAID_OFFER.test(text) && !followUpAgreed
+        ? "The seller introduced a paid consultation and no follow-up action was explicitly agreed. The next step left on the call was a link, not a meeting."
         : notAPurchase
           ? "No purchase process was opened."
-          : met
-            ? "A follow-up time was part of the conversation."
-            : "No dated next meeting was secured on the call.";
+          : followUpAgreed
+            ? "A follow-up action was proposed and agreed on the call."
+            : followUpProposed
+              ? "A follow-up was proposed, but the buyer did not clearly agree to it on the call."
+              : "No clear follow-up action or next step was proposed on the call.";
 
   return {
     buyingSignals,
@@ -946,6 +1045,89 @@ export function matrixFacing(input: {
       : "—",
     planTitle: "Recovery plan",
     whyTitle: "Why it is stalling",
+  };
+}
+
+export interface UnifiedDealHeadlineInput {
+  status?: string;
+  trajectory?: string;
+  recoverabilityStatus?: string;
+  relevanceLabel?: string;
+  transcript?: string;
+  /** Optional blocker person for "blocked on Name". */
+  blockedOn?: string | null;
+  viabilityState?: string;
+  recoverabilityScore?: number;
+}
+
+/**
+ * Single deterministic top-line: status, recoverability, and forecast judgment in one pass.
+ * Replaces conflicting Current Status / Recoverability / Forecast lines.
+ */
+export function unifiedDealHeadline(input: UnifiedDealHeadlineInput): {
+  line: string;
+  facing: MatrixFacing;
+  forecastLine: string;
+  removeFromForecast: boolean;
+  showRecoveryPlan: boolean;
+} {
+  const facing = matrixFacing(input);
+  const statusForForecast = facing.category === "unresolved"
+    ? "MOTION NOT ESTABLISHED"
+    : facing.offForecast
+      ? "NOT A PURCHASE"
+      : input.status;
+  const guidance = forecastGuidance({
+    status: statusForForecast,
+    trajectory: input.trajectory,
+    recoverability: input.recoverabilityScore,
+    viabilityState: input.viabilityState,
+  });
+
+  if (facing.category === "not_a_deal") {
+    return {
+      line: "Not a deal and flat no as a purchase, keep off the forecast",
+      facing,
+      forecastLine: guidance.line,
+      removeFromForecast: true,
+      showRecoveryPlan: guidance.showRecoveryPlan,
+    };
+  }
+  if (facing.category === "unresolved") {
+    return {
+      line: "Motion not established and unread, keep off the forecast until speakers can be read",
+      facing,
+      forecastLine: guidance.line,
+      removeFromForecast: true,
+      showRecoveryPlan: false,
+    };
+  }
+
+  const statusBit = /CLOSED\s*WON/i.test(input.status ?? "")
+    ? "Closed-won"
+    : /CLOSED\s*LOST/i.test(input.status ?? "")
+      ? "Closed-lost"
+      : /VELOCITY|ACTIVE/i.test(input.trajectory ?? "")
+        ? "Moving"
+        : "Stalled";
+  const recoverabilityBit = (facing.recoverabilityLabel || "undetermined").toLowerCase();
+  const blocked = input.blockedOn?.trim();
+  const forecastBit = guidance.removeFromForecast
+    ? blocked
+      ? `blocked on ${blocked}, keep off the forecast`
+      : "keep off the forecast"
+    : blocked
+      ? `blocked on ${blocked}, keep on forecast only with an owned plan`
+      : /recoverable/i.test(input.trajectory ?? "")
+        ? "keep on forecast only with an owned plan"
+        : "protect momentum";
+
+  return {
+    line: `${statusBit} and ${recoverabilityBit}, ${forecastBit}`,
+    facing,
+    forecastLine: guidance.line,
+    removeFromForecast: guidance.removeFromForecast,
+    showRecoveryPlan: guidance.showRecoveryPlan,
   };
 }
 

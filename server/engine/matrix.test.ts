@@ -67,12 +67,14 @@ function testModel3(): void {
       { role: "ECONOMIC_BUYER", status: "ACTIVE", weight: 0.45 },
     ],
   });
-  assertClose(result.rawDri, 131.8, 1, "Model 3 raw DRI");
-  assert(result.dri === 100, `Model 3: DRI capped 100, got ${result.dri}`);
+  // Single-signal cap (42) keeps velocity from forcing 100 alone; composite still elevated.
+  assertClose(result.rawDri, 84.1, 1, "Model 3 raw DRI");
+  assert(result.dri === 84, `Model 3: DRI 84 after signal cap, got ${result.dri}`);
   assert(
-    result.targetStage === "REQUIRES_MANUAL_REVIEW",
-    `Model 3: REQUIRES_MANUAL_REVIEW, got ${result.targetStage}`
+    result.breakdown.deltaVelocity <= 42,
+    `Model 3: velocity term must respect single-signal cap, got ${result.breakdown.deltaVelocity}`
   );
+  assert(result.targetStage === "STALLED", `Model 3: STALLED, got ${result.targetStage}`);
   const det = result.reprofiledStakeholders.find((s) => s.role === "DETRACTOR");
   assert(det, "Model 3: champion re-profiled to DETRACTOR");
   console.log("✓ Test Model 3: Elevated Risk & Champion Entropy Decay");

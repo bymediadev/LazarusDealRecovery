@@ -75,6 +75,12 @@ export const GlobalParameters = {
   tau: 14.0,
   /** Stakeholder risk coefficient before authority weights */
   gammaScale: 15,
+  /**
+   * No single DRI term (Δ velocity, Φ entropy, Ψ sentiment, Γ stakeholder)
+   * may contribute more than this to the composite — prevents one signal
+   * (e.g. stage stall alone, or one absent economic buyer) from forcing 100.
+   */
+  maxSingleSignalContribution: 42,
   /** Gate 0 commercial intent floor */
   commercialIntentFloor: 20,
   /** Champion silence threshold → DETRACTOR */
