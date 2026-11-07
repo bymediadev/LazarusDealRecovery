@@ -98,9 +98,13 @@ export function telemetryFromAnalysis(
 ): EngineMatrixDecision & { telemetry_inputs: DriInputRecord[] } {
   const mapped = mapStakeholders(stakeholders);
   const authorityGap = hasAuthorityGap(stakeholders);
+  // Recoverable temporary gaps must not enter the locked proxy band. A mistyped
+  // Structural force used to flip DEFERRED (recoverable) into DRI 100.
   const locked =
     /NON-VIABLE|DEAD|DEFERRED \(locked\)/i.test(frozen.trajectory_type) ||
-    (frozen.structural_lock_in >= 80 && frozen.constraint_pressure >= 70);
+    (frozen.structural_lock_in >= 80 &&
+      frozen.constraint_pressure >= 70 &&
+      !/DEFERRED \(recoverable\)/i.test(frozen.trajectory_type));
   const healthy =
     frozen.viability_score >= 70 &&
     frozen.constraint_pressure < 40 &&

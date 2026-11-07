@@ -17,6 +17,7 @@ import {
   diagnosticProfile,
   forceDuration,
   isNotAPurchase,
+  isTemporaryAuthorityAbsence,
   mapForcesToScores,
   parseTurns,
   purchaseMotion,
@@ -555,6 +556,131 @@ check(
   repeat.frozen.viability_score === runA.frozen.viability_score &&
     repeat.pi.deal_risk_index === runA.pi.deal_risk_index &&
     repeat.status === runA.status
+);
+
+// --- Temporary absence label must not flip viability or DRI ---
+const daveAbsenceEvidence =
+  "Dave, our VP of Infrastructure, missed the technical demo yesterday. He had a P1 outage and couldn't join.";
+const absenceAsConstraint = [
+  {
+    factor: "Dave VP Infrastructure absent — architecture gate",
+    type: "Constraint",
+    weight: 90,
+    evidence: daveAbsenceEvidence,
+  },
+  northlineForces[2],
+  northlineForces[3],
+];
+const absenceAsStructural = [
+  {
+    factor: "Dave VP Infrastructure absent — architecture gate",
+    type: "Structural",
+    weight: 90,
+    evidence: daveAbsenceEvidence,
+  },
+  northlineForces[2],
+  northlineForces[3],
+];
+check(
+  "missed-demo evidence is a temporary authority absence",
+  isTemporaryAuthorityAbsence(absenceAsStructural[0]) === true,
+  absenceAsStructural[0]
+);
+const labelConstraint = scoreNorthline(absenceAsConstraint);
+const labelStructural = scoreNorthline(absenceAsStructural);
+check(
+  "Constraint vs Structural label on the same Dave absence yields identical scores",
+  labelConstraint.frozen.viability_score === labelStructural.frozen.viability_score &&
+    labelConstraint.frozen.structural_lock_in === labelStructural.frozen.structural_lock_in &&
+    labelConstraint.frozen.constraint_pressure === labelStructural.frozen.constraint_pressure &&
+    labelConstraint.frozen.equilibrium_state === labelStructural.frozen.equilibrium_state &&
+    labelConstraint.pi.deal_risk_index === labelStructural.pi.deal_risk_index &&
+    labelConstraint.frozen.structural_lock_in === 0,
+  {
+    constraint: {
+      v: labelConstraint.frozen.viability_score,
+      s: labelConstraint.frozen.structural_lock_in,
+      c: labelConstraint.frozen.constraint_pressure,
+      eq: labelConstraint.frozen.equilibrium_state,
+      dri: labelConstraint.pi.deal_risk_index,
+    },
+    structural: {
+      v: labelStructural.frozen.viability_score,
+      s: labelStructural.frozen.structural_lock_in,
+      c: labelStructural.frozen.constraint_pressure,
+      eq: labelStructural.frozen.equilibrium_state,
+      dri: labelStructural.pi.deal_risk_index,
+    },
+  }
+);
+const heavyWeights = scoreNorthline([
+  {
+    factor: "Dave VP Infrastructure absent — architecture gate",
+    type: "Constraint",
+    weight: 95,
+    evidence: daveAbsenceEvidence,
+  },
+  {
+    factor: "Buyer interest in overview",
+    type: "Intent",
+    weight: 88,
+    evidence: "Sarah, I like what I saw in the overview.",
+  },
+  {
+    factor: "Budget modeled at $280K",
+    type: "Enabler",
+    weight: 92,
+    evidence: "$280,000 annual platform fee was in range. Budget-wise, $280K is what we modeled.",
+  },
+]);
+const lightWeights = scoreNorthline([
+  {
+    factor: "Dave VP Infrastructure absent — architecture gate",
+    type: "Constraint",
+    weight: 55,
+    evidence: daveAbsenceEvidence,
+  },
+  {
+    factor: "Buyer interest in overview",
+    type: "Intent",
+    weight: 40,
+    evidence: "Sarah, I like what I saw in the overview.",
+  },
+  {
+    factor: "Budget modeled at $280K",
+    type: "Enabler",
+    weight: 35,
+    evidence: "$280,000 annual platform fee was in range. Budget-wise, $280K is what we modeled.",
+  },
+]);
+check(
+  "heavy vs light LLM weights on the same Northline evidence lock the same viability",
+  heavyWeights.frozen.viability_score === lightWeights.frozen.viability_score &&
+    heavyWeights.frozen.viability_score === labelConstraint.frozen.viability_score &&
+    heavyWeights.frozen.intent_strength === 50 &&
+    heavyWeights.frozen.enabler_strength === 60 &&
+    heavyWeights.frozen.constraint_pressure === 90,
+  {
+    heavy: heavyWeights.frozen.viability_score,
+    light: lightWeights.frozen.viability_score,
+    labeled: labelConstraint.frozen.viability_score,
+    intent: heavyWeights.frozen.intent_strength,
+    enabler: heavyWeights.frozen.enabler_strength,
+    constraint: heavyWeights.frozen.constraint_pressure,
+  }
+);
+check(
+  "Northline temporary gap stays off the locked DRI band",
+  labelConstraint.pi.deal_risk_index < 85 && labelStructural.pi.deal_risk_index < 85,
+  {
+    constraintDri: labelConstraint.pi.deal_risk_index,
+    structuralDri: labelStructural.pi.deal_risk_index,
+  }
+);
+check(
+  "canonical Northline fixture keeps structural lock-in at 0",
+  runA.frozen.structural_lock_in === 0,
+  { structural: runA.frozen.structural_lock_in, forces: runA.causal.forces.map((f) => `${f.type}:${f.weight}`) }
 );
 
 console.log(

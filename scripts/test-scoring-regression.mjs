@@ -181,8 +181,8 @@ if (s.trajectory_type !== "DEFERRED (recoverable)") {
   console.error("FAIL: Sarah/Mark trajectory should be DEFERRED (recoverable), got", s.trajectory_type);
   failed = true;
 }
-if (s.viability_score < 30 || s.viability_score > 55) {
-  console.error("FAIL: Sarah/Mark viability should be 30-55, got", s.viability_score);
+if (s.viability_score < 30 || s.viability_score > 60) {
+  console.error("FAIL: Sarah/Mark viability should be 30-60 after temporary-gap weight lock, got", s.viability_score);
   failed = true;
 }
 if (sPi.deal_risk_index >= aPi.deal_risk_index) {
@@ -462,8 +462,16 @@ console.log(
 );
 console.log("  formula:", northlinePi.formula);
 
-if (northline.viability_score < 30 || northline.viability_score > 65) {
-  console.error("FAIL: Northline viability should be 30-65, got", northline.viability_score);
+if (northline.viability_score !== 56) {
+  console.error("FAIL: Northline viability should lock at 56, got", northline.viability_score);
+  failed = true;
+}
+if (northline.intent_strength !== 50 || northline.enabler_strength !== 60 || northline.constraint_pressure !== 90) {
+  console.error("FAIL: Northline temporary-gap weights should lock to 50/60/90", {
+    intent: northline.intent_strength,
+    enabler: northline.enabler_strength,
+    constraint: northline.constraint_pressure,
+  });
   failed = true;
 }
 if (northline.trajectory_type !== "DEFERRED (recoverable)") {
@@ -742,8 +750,18 @@ if (suppressedForecast.removeFromForecast) {
   console.error("FAIL: Suppressed Northline should stay on the forecast", suppressedForecast);
   failed = true;
 }
-if (suppressedFrozen.equilibrium_state !== "PINNED") {
-  console.error("FAIL: A 170 force sum should read PINNED, got", suppressedFrozen.equilibrium_state);
+if (suppressedFrozen.structural_lock_in !== 0) {
+  console.error(
+    "FAIL: A missed-demo Structural label must not set structural lock-in, got",
+    suppressedFrozen.structural_lock_in
+  );
+  failed = true;
+}
+if (suppressedFrozen.equilibrium_state !== "OPEN") {
+  console.error(
+    "FAIL: Temporary absence pressure should stay OPEN once structural is cleared, got",
+    suppressedFrozen.equilibrium_state
+  );
   failed = true;
 }
 if (northline.equilibrium_state !== "OPEN") {
@@ -822,9 +840,9 @@ if (calendarMiss.causal.blocker_classification !== "TEMPORARY BLOCKERS") {
   );
   failed = true;
 }
-if (calendarMiss.frozen.viability_score < 30 || calendarMiss.frozen.viability_score > 65) {
+if (calendarMiss.frozen.viability_score < 50 || calendarMiss.frozen.viability_score > 90) {
   console.error(
-    "FAIL: Calendar-miss viability should be 30-65, got",
+    "FAIL: Calendar-miss viability should be 50-90 once structural mislabel is cleared, got",
     calendarMiss.frozen.viability_score
   );
   failed = true;
@@ -833,6 +851,13 @@ if (calendarMiss.frozen.trajectory_type !== "DEFERRED (recoverable)") {
   console.error(
     "FAIL: Calendar-miss trajectory should be DEFERRED (recoverable), got",
     calendarMiss.frozen.trajectory_type
+  );
+  failed = true;
+}
+if (calendarMiss.frozen.structural_lock_in !== 0) {
+  console.error(
+    "FAIL: Calendar-miss Structural label must not set structural lock-in, got",
+    calendarMiss.frozen.structural_lock_in
   );
   failed = true;
 }

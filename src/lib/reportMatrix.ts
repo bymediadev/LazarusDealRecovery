@@ -1318,6 +1318,18 @@ function raisesConstraintFromAuthorityGate(force: MatrixForce): boolean {
 }
 
 /**
+ * A missed demo / underwater-until calendar absence is a temporary authority gate.
+ * The model may label it Structural; the scorer must not. That label flip is what
+ * moved Northline from viability ~78 / risk ~56 to viability ~58 / risk 100 on the
+ * same transcript. Permanent freezes and audits stay structural.
+ */
+export function isTemporaryAuthorityAbsence(force: MatrixForce): boolean {
+  if (isSpendingFreeze(force) || PERMANENT_DURATION.test(blob(force))) return false;
+  if (raisesConstraintFromAuthorityGate(force)) return true;
+  return TEMPORARY_ABSENCE.test(blob(force)) && isAuthorityGate(force);
+}
+
+/**
  * Map each force onto one scoring input. Overlapping evidence is kept once.
  * A force that does not move a score still carries the reason it was left out.
  */
@@ -1329,7 +1341,12 @@ export function mapForcesToScores(forces: MatrixForce[]): {
 } {
   const freezePresent = forces.some((force) => isSpendingFreeze(force));
   const structuralWeights = forces
-    .filter((force) => !isOpenPilot(force) && (force.type.toLowerCase() === "structural" || isSpendingFreeze(force)))
+    .filter(
+      (force) =>
+        !isOpenPilot(force) &&
+        !isTemporaryAuthorityAbsence(force) &&
+        (force.type.toLowerCase() === "structural" || isSpendingFreeze(force))
+    )
     .map((force) => force.weight);
   const structural_lock_in = structuralWeights.length ? Math.max(...structuralWeights) : 0;
   const constraintWeights = forces
@@ -1428,6 +1445,16 @@ export function mapForcesToScores(forces: MatrixForce[]): {
         included: true,
         duration,
         reason: "Enabler strength is the strongest Enabler-force weight.",
+      };
+    } else if (isTemporaryAuthorityAbsence(force)) {
+      const included = force.weight === constraint_pressure && constraint_pressure > 0;
+      score_effect = {
+        dimension: "constraint_pressure",
+        included,
+        duration: duration === "UNKNOWN" || duration === "CONDITIONAL" ? "TEMPORARY" : duration,
+        reason: included
+          ? "A temporary absence or missed technical validation sets constraint pressure. It is not structural lock-in, even when the extraction labeled it Structural."
+          : `Constraint pressure stays at ${constraint_pressure}. This temporary authority gate is recorded and is not added again, and it does not set structural lock-in.`,
       };
     } else if (raisesConstraintFromAuthorityGate(force) && type === "behavioral") {
       const included = force.weight === constraint_pressure && constraint_pressure > 0;
@@ -1528,7 +1555,9 @@ export function mapForcesToScores(forces: MatrixForce[]): {
     }
 
     trace.push(`${force.factor}: ${score_effect.included ? "counted" : "not counted"} — ${score_effect.reason}`);
-    return { ...force, score_effect };
+    const typeForScore =
+      type === "structural" && isTemporaryAuthorityAbsence(force) ? "Constraint" : force.type;
+    return { ...force, type: typeForScore, score_effect };
   });
 
   return { forces: annotated, constraint_pressure, structural_lock_in, trace };

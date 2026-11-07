@@ -12,6 +12,7 @@ import {
   classifyRecoverability,
   classifyRisk,
   isSoleOperator,
+  isTemporaryAuthorityAbsence,
   mapForcesToScores,
   type RecoverabilityAssessment,
 } from "../src/lib/reportMatrix.js";
@@ -470,10 +471,73 @@ function clusterId(text: string): string | null {
   return null;
 }
 
+function coerceTemporaryAbsenceType(force: ScoringForce): ScoringForce {
+  if (force.type.toLowerCase() !== "structural") return force;
+  if (!isTemporaryAuthorityAbsence(force)) return force;
+  return { ...force, type: "Constraint" };
+}
+
+/**
+ * Once the deal is a temporary calendar/authority gap, Structural labels are
+ * constraints. The model may file "Dave is skeptical…" as Structural; that must
+ * not set structural lock-in or PINNED on a missed-demo stall.
+ */
+function coerceStructuralGatesUnderTemporaryBlocker(
+  forces: ScoringForce[],
+  blocker: string
+): ScoringForce[] {
+  if (!/TEMPORARY/i.test(blocker)) return forces;
+  return forces.map((force) => {
+    if (force.type.toLowerCase() !== "structural") return force;
+    const text = `${force.factor} ${force.evidence}`;
+    if (/\b(freeze|frozen|audit|permanent|prohibited|banned)\b/i.test(text)) {
+      return force;
+    }
+    return { ...force, type: "Constraint" };
+  });
+}
+
+/**
+ * Fixed scoring inputs for a pure missed-meeting / temporary authority gap.
+ * LLM weights on the same Dave evidence were moving viability 70↔82 (and
+ * earlier 53↔78). Presence of the evidence sets the band; the model does not.
+ * Does not apply when an audit/freeze is also in the evidence.
+ */
+const TEMPORARY_CALENDAR_GAP_WEIGHTS = {
+  intent: 50,
+  enabler: 60,
+  constraint: 90,
+  timing: 4,
+} as const;
+
+function isPureTemporaryCalendarGap(
+  forces: ScoringForce[],
+  transcript: string,
+  blocker: string
+): boolean {
+  if (!/TEMPORARY/i.test(blocker)) return false;
+  const blob = normalizeText(
+    [transcript, ...forces.map((force) => `${force.factor} ${force.evidence}`)].join(" ")
+  );
+  // An audit/freeze under a mislabeled temporary blocker must keep its own weights.
+  return !SYSTEM_LOCK.some((phrase) => blob.includes(phrase));
+}
+
+function quantizeTemporaryCalendarGapForces(forces: ScoringForce[]): ScoringForce[] {
+  const w = TEMPORARY_CALENDAR_GAP_WEIGHTS;
+  return forces.map((force) => {
+    const type = force.type.toLowerCase();
+    if (type === "intent") return { ...force, weight: w.intent };
+    if (type === "enabler") return { ...force, weight: w.enabler };
+    if (type === "constraint" || type === "behavioral") return { ...force, weight: w.constraint };
+    return force;
+  });
+}
+
 export function mergeForces(forces: ScoringForce[]): ScoringForce[] {
   if (!forces.length) return forces;
 
-  const polarized = forces.map(resolveForcePolarity);
+  const polarized = forces.map(resolveForcePolarity).map(coerceTemporaryAbsenceType);
   const merged: ScoringForce[] = [];
   const consumed = new Set<number>();
   const clusterGroups = new Map<string, ScoringForce[]>();
@@ -490,9 +554,13 @@ export function mergeForces(forces: ScoringForce[]): ScoringForce[] {
 
   for (const group of clusterGroups.values()) {
     const maxW = Math.max(...group.map((g) => g.weight));
-    const hasStructural = group.some((g) => g.type.toLowerCase() === "structural");
+    const allTemporary = group.every((g) => isTemporaryAuthorityAbsence(g));
+    const hasStructural = !allTemporary && group.some((g) => g.type.toLowerCase() === "structural");
     merged.push({
-      factor: group.length > 1 ? `STRUCTURAL LOCK-IN: ${group[0].factor}` : group[0].factor,
+      factor:
+        group.length > 1 && hasStructural
+          ? `STRUCTURAL LOCK-IN: ${group[0].factor}`
+          : group[0].factor,
       type: hasStructural ? "Structural" : "Constraint",
       weight: maxW,
       role: "parent",
@@ -829,7 +897,40 @@ export function deriveCanonicalState(
       after_weight: 0,
     });
   }
-  const mapped = mapForcesToScores(merged);
+  let forScoring = coerceStructuralGatesUnderTemporaryBlocker(merged, blocker);
+  if (forScoring.map(forceIdentity).join("||") !== merged.map(forceIdentity).join("||")) {
+    transforms.push({
+      rule_id: "temporary_absence_not_structural",
+      reason:
+        "A temporary calendar or authority gap was labeled Structural. It is scored as Constraint so the same absence cannot flip structural lock-in, equilibrium, or deal risk across runs.",
+      evidence_source: "transcript",
+      before_factors: merged.filter((force) => force.type.toLowerCase() === "structural").map((force) => force.factor),
+      after_factor: forScoring
+        .filter((force) => merged.some((prior) => prior.factor === force.factor && prior.type !== force.type))
+        .map((force) => force.factor)
+        .join(" | "),
+      after_type: "Constraint",
+      after_weight: 0,
+    });
+  }
+  const pureTemporaryGap = isPureTemporaryCalendarGap(forScoring, transcript, blocker);
+  if (pureTemporaryGap) {
+    const beforeQuantize = forScoring.map(forceIdentity).join("||");
+    forScoring = quantizeTemporaryCalendarGapForces(forScoring);
+    if (forScoring.map(forceIdentity).join("||") !== beforeQuantize) {
+      transforms.push({
+        rule_id: "temporary_calendar_gap_weight_lock",
+        reason:
+          "A missed-meeting authority gap uses fixed intent, enabler, and constraint weights so viability cannot drift when the model changes numeric weights on the same evidence.",
+        evidence_source: "transcript",
+        before_factors: merged.map((force) => force.factor),
+        after_factor: `intent ${TEMPORARY_CALENDAR_GAP_WEIGHTS.intent} / enabler ${TEMPORARY_CALENDAR_GAP_WEIGHTS.enabler} / constraint ${TEMPORARY_CALENDAR_GAP_WEIGHTS.constraint}`,
+        after_type: "mixed",
+        after_weight: TEMPORARY_CALENDAR_GAP_WEIGHTS.constraint,
+      });
+    }
+  }
+  const mapped = mapForcesToScores(forScoring);
   const forces = mapped.forces.map((force, index) => ({
     ...force,
     attribution: attributeStatement(transcript, force.factor, force.evidence, force.type, index),
@@ -840,7 +941,9 @@ export function deriveCanonicalState(
   const constraint_pressure = mapped.constraint_pressure;
   const structural_lock_in = mapped.structural_lock_in;
   const enabler_strength = maxWeight(forces, "Enabler");
-  const timing_factor = inferTimingFactor(forces);
+  const timing_factor = pureTemporaryGap
+    ? TEMPORARY_CALENDAR_GAP_WEIGHTS.timing
+    : inferTimingFactor(forces);
 
   const effective_intent = effectiveIntent(
     intent_strength,

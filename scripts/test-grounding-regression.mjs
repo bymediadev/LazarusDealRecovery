@@ -203,4 +203,81 @@ if (!finalAudit.rejected_evidence.some((item) => item.kind === "force")) {
   process.exit(1);
 }
 
+// Silent / absent people use "not stated". That is not an ungrounded claim on Northline.
+const silentDaveAudit = auditTranscriptGrounding({
+  transcript: sarahMark,
+  dealValue: 280000,
+  causal_forces: [
+    {
+      factor: "Dave missed the technical demo",
+      type: "Constraint",
+      weight: 90,
+      evidence: "Dave, our VP of Infrastructure, missed the technical demo yesterday. He had a P1 outage and couldn't join.",
+    },
+  ],
+  executive_summary: "Deal waits on Dave.",
+  stakeholders: [
+    {
+      name: "Mark O'Brien",
+      role: "Director of Operations",
+      stance: "Suppressed Champion",
+      authority_level: "influencer",
+      persona_type: "Suppressed Champion",
+      evidence: "Sarah, I like what I saw in the overview.",
+    },
+    {
+      name: "Dave",
+      role: "VP of Infrastructure",
+      stance: "Absent Decision Maker",
+      authority_level: "technical_veto",
+      persona_type: "Absent Decision Maker",
+      evidence: "not stated",
+    },
+  ],
+});
+if (!silentDaveAudit.pass || silentDaveAudit.ungrounded_stakeholders.length > 0) {
+  console.error(
+    "REGRESSION FAILED: named silent Dave with 'not stated' failed grounding",
+    silentDaveAudit.ungrounded_stakeholders,
+    silentDaveAudit.pass
+  );
+  process.exit(1);
+}
+
+const repairedSilent = ensureGroundedStakeholders(
+  silentDaveAudit.stakeholders,
+  sarahMark
+);
+const daveAfterRepair = repairedSilent.find((person) => /dave/i.test(person.name));
+if (!daveAfterRepair || !evidenceMatchesTranscript(daveAfterRepair.evidence, sarahMark)) {
+  console.error("REGRESSION FAILED: silent Dave was not upgraded to a transcript quote", daveAfterRepair);
+  process.exit(1);
+}
+
+const silentFinal = composeFinalGroundingAudit(silentDaveAudit, {
+  ...silentDaveAudit,
+  stakeholders: repairedSilent.map((person) => ({
+    ...person,
+    evidence_source: "transcript",
+  })),
+  ungrounded_stakeholders: [],
+  rejected_evidence: [],
+  grounded_force_count: 1,
+  pass: true,
+  grounding_status: "fully_grounded",
+});
+if (!silentFinal.pass || silentFinal.grounding_status !== "fully_grounded") {
+  console.error(
+    "REGRESSION FAILED: repaired silent Dave stayed partially grounded",
+    silentFinal.grounding_status,
+    silentFinal.pass,
+    silentFinal.warnings
+  );
+  process.exit(1);
+}
+if (silentFinal.warnings.some((warning) => /Grounding was partial/i.test(warning))) {
+  console.error("REGRESSION FAILED: silent Dave still shows the partial-grounding banner", silentFinal.warnings);
+  process.exit(1);
+}
+
 console.log("REGRESSION OK");

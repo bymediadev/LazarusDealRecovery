@@ -188,6 +188,23 @@ export function classifyEvidenceSource(
   return "none";
 }
 
+/**
+ * The extractor is told to use exactly "not stated" when a person never spoke a
+ * stance line. That is not a hallucination — it marks a silent / secondhand person.
+ * Grounding must not fail the run for that marker when the person is named in the call.
+ */
+export function isSilentStakeholderEvidence(evidence: string | undefined | null): boolean {
+  const value = (evidence ?? "").trim().toLowerCase();
+  return value === "not stated" || value === "n/a" || value === "none" || value === "unknown" || value === "";
+}
+
+export function personNamedInTranscript(name: string, transcript: string): boolean {
+  const token = name.trim().split(/\s+/)[0] ?? "";
+  if (!token || token.length < 2) return false;
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}\\b`, "i").test(transcript);
+}
+
 /** Dollar amounts in output that never appear in the transcript */
 export function detectInventedDollarAmounts(
   outputText: string,
@@ -379,12 +396,16 @@ export function auditTranscriptGrounding(input: {
   for (const s of stakeholders) {
     if (!s.name.trim()) continue;
     const source = s.evidence_source ?? classifyEvidenceSource(s.evidence, transcript, supplemental);
-    if (source === "none") {
-      ungrounded_stakeholders.push({
-        name: s.name,
-        reason: "Stakeholder evidence not grounded in transcript",
-      });
+    if (source !== "none") continue;
+    // Silent people named in the call are repaired to a verbatim span later.
+    // Do not fail grounding for the mandated "not stated" marker.
+    if (isSilentStakeholderEvidence(s.evidence) && personNamedInTranscript(s.name, transcript)) {
+      continue;
     }
+    ungrounded_stakeholders.push({
+      name: s.name,
+      reason: "Stakeholder evidence not grounded in transcript",
+    });
   }
 
   const grounded_force_count = causal_forces.length - ungrounded_forces.length;
@@ -474,8 +495,9 @@ function rejectedFromAudit(audit: {
 }
 
 /**
- * Final audit after filtering. A failed extraction stays failed even when the
- * remaining forces are safe to score. Removed claims stay on rejected_evidence.
+ * Final audit after filtering. Invented forces/terms that were stripped keep the
+ * run partial. A silent stakeholder repaired to a verbatim transcript span does
+ * not — that was a marker, not a removed claim.
  */
 export function composeFinalGroundingAudit(
   prior: GroundingAudit,
@@ -489,16 +511,23 @@ export function composeFinalGroundingAudit(
     refreshed.ungrounded_stakeholders.length > 0 ||
     refreshed.grounded_force_count === 0;
 
-  const removedSomething = !prior.pass;
+  const hadStrippedClaims =
+    prior.ungrounded_forces.length > 0 ||
+    prior.invented_terms.length > 0 ||
+    prior.invented_amounts.length > 0;
+
   let grounding_status: GroundingStatus;
   if (scoringUnsafe && refreshed.grounded_force_count === 0) grounding_status = "rejected";
-  else if (scoringUnsafe || removedSomething) grounding_status = "partially_grounded";
+  else if (scoringUnsafe || hadStrippedClaims) grounding_status = "partially_grounded";
   else grounding_status = "fully_grounded";
 
   const warnings = [
     ...prior.warnings.filter((warning) => !/Missing stakeholder/i.test(warning)),
     ...refreshed.warnings.filter((warning) => !prior.warnings.includes(warning)),
-  ];
+  ].filter(
+    (warning) =>
+      !/Grounding was partial|Grounding rejected the extraction/i.test(warning)
+  );
   if (grounding_status === "partially_grounded") {
     warnings.push(
       "Grounding was partial. Ungrounded claims were removed before scoring. This is not a fully grounded extraction."
@@ -508,10 +537,25 @@ export function composeFinalGroundingAudit(
     warnings.push("Grounding rejected the extraction. No safe force remained for scoring.");
   }
 
+  const sameLabel = (a: RejectedEvidence, b: RejectedEvidence) =>
+    a.kind === b.kind && a.label === b.label;
+
+  const priorRejectedKept = prior.rejected_evidence.filter((item) => {
+    if (item.kind !== "stakeholder") return true;
+    const stillUngrounded = refreshed.ungrounded_stakeholders.some(
+      (person) => person.name.trim().toLowerCase() === item.label.trim().toLowerCase()
+    );
+    const kept = refreshed.stakeholders.some(
+      (person) => person.name.trim().toLowerCase() === item.label.trim().toLowerCase()
+    );
+    // Drop stakeholder rejects that were repaired and kept with grounded evidence.
+    return stillUngrounded || !kept;
+  });
+
   const rejected_evidence = [
-    ...prior.rejected_evidence,
+    ...priorRejectedKept,
     ...refreshed.rejected_evidence.filter(
-      (item) => !prior.rejected_evidence.some((priorItem) => priorItem.kind === item.kind && priorItem.label === item.label)
+      (item) => !priorRejectedKept.some((priorItem) => sameLabel(priorItem, item))
     ),
   ];
 
@@ -523,9 +567,7 @@ export function composeFinalGroundingAudit(
     invented_terms: [...new Set([...prior.invented_terms, ...refreshed.invented_terms])],
     invented_amounts: [...new Set([...prior.invented_amounts, ...refreshed.invented_amounts])],
     missing_critical_stakeholders: refreshed.missing_critical_stakeholders,
-    ungrounded_stakeholders: prior.ungrounded_stakeholders.length
-      ? prior.ungrounded_stakeholders
-      : refreshed.ungrounded_stakeholders,
+    ungrounded_stakeholders: refreshed.ungrounded_stakeholders,
     rejected_evidence,
     warnings,
     stakeholders: refreshed.stakeholders,
