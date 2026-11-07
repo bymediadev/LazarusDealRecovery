@@ -416,14 +416,17 @@ export default function MarketingHome({
 
           <div className="marketing-qa-group">
             <h3>How the score is made</h3>
-            <p>The model maps the words. Fixed rules write the score.</p>
+            <p>
+              The model finds the quotes. The server writes the numbers. On a missed meeting, the
+              model’s weights cannot move viability.
+            </p>
           </div>
           <details className="marketing-qa-item">
             <summary>What model reads the deal?</summary>
             <div className="marketing-qa-panel">
               <p>
-                Google Gemini reads the transcript and maps it to the Force Interaction Framework.
-                It does not write the score.
+                Google Gemini reads the transcript and maps each quote to a force. It does not write
+                viability, the Deal Risk Score, or recoverable versus a flat no.
               </p>
               <p>
                 The five free runs use Google Gemini 2.5 Flash. If Gemini is unavailable, that run
@@ -432,8 +435,11 @@ export default function MarketingHome({
               </p>
               <p>Entry uses Gemini 2.5 Pro. Team uses Gemini 3.1 Pro.</p>
               <p>
-                Recoverable or a flat no, the risk score, and the next steps come from fixed rules
-                on our server.
+                The server strips a quote or person that is not in the upload, and the report says so.
+                On a missed meeting, with no audit, freeze, compliance, or permanent lock in the
+                evidence, it
+                replaces the model’s weights. Those weights cannot move viability on a second paste. A
+                structural label on that miss does not jump Deal Risk to critical.
               </p>
             </div>
           </details>
@@ -441,14 +447,28 @@ export default function MarketingHome({
             <summary>What sales framework breaks the deal down?</summary>
             <div className="marketing-qa-panel">
               <p>
-                The Force Interaction Framework maps spoken evidence. Gemini only maps words that
-                were actually spoken — it does not write the Deal Risk Index.
+                The Force Interaction Framework maps spoken evidence. Each quote is one force: intent,
+                an enabler, a constraint, timing, behavior, or structural. A quote that is not in the
+                upload is stripped before the score.
               </p>
               <p>
-                Each quote is one force: an enabler, constraint, intent, timing, or behavior. Gate 0
-                filters non-deals. The server matrix then scores a non-linear Deal Risk Index from
-                stage velocity, unanswered-touch entropy, sentiment memory, and stakeholder
-                authority. That score is recoverable or a flat no, plus the next steps.
+                Viability comes from those forces. It says whether a path to advance still exists. It
+                is not a close probability. The model does not write it.
+              </p>
+              <p>
+                Deal Risk is a separate score. The model does not write it. When stage days or
+                unanswered touches were not supplied, the report marks them inferred. They stand in
+                for the viability band. They are not a CRM measurement. A technical approver is not
+                scored as the economic buyer.
+              </p>
+              <p>
+                A missed meeting with no audit, freeze, compliance, or permanent lock stays
+                recoverable. Scoring
+                that miss as structural does not push Deal Risk to critical.
+              </p>
+              <p>
+                If the call never opened a purchase, the stall scores stay off the page. The brief
+                says not a deal, or motion not established.
               </p>
             </div>
           </details>
@@ -458,7 +478,8 @@ export default function MarketingHome({
               <p>
                 ChatGPT writes. Paste the same call twice and the answer can change. A general AI
                 generates an answer. Lazarus checks quotes against the transcript, then scores with
-                fixed rules you can defend in the room.
+                fixed rules you can defend in the room. On a missed meeting, changing the model’s
+                weights does not move viability.
               </p>
             </div>
           </details>

@@ -15,7 +15,7 @@ export function arrivalFromPath(pathname = ""): Arrival | null {
   return null;
 }
 
-/** Email and LinkedIn open the qualifier on arrival. A normal site visit uses the dock timer. */
+/** Email and LinkedIn open the qualifier on arrival. A normal site visit leaves the dock closed until the visitor opens it. */
 export function readArrival(search = "", referrer = "", pathname = ""): Arrival {
   const fromPath = arrivalFromPath(pathname);
   if (fromPath) return fromPath;

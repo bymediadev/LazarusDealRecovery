@@ -114,7 +114,7 @@ check("linkedin path opens now", readArrival("", "", "/qualify/linkedin") === "l
 check("email path opens now", readArrival("", "", "/qualify/email") === "email");
 check("linkedin referrer opens now", readArrival("", "https://www.linkedin.com/feed/") === "linkedin");
 check("email medium opens now", readArrival("?utm_medium=email", "") === "email" && arrivalOpensNow("email"));
-check("a normal visit stays on the site timer", readArrival("", "https://www.google.com/") === "site" && !arrivalOpensNow("site"));
+check("a normal visit leaves the dock closed", readArrival("", "https://www.google.com/") === "site" && !arrivalOpensNow("site"));
 check("linkedin share link is its own qualify page", SHARE_LINKS.linkedin === "https://www.getldr.ca/qualify/linkedin");
 check("email share link is its own qualify page", SHARE_LINKS.email === "https://www.getldr.ca/qualify/email");
 check("home linkedin sends people to /qualify/linkedin", qualifySharePath("?from=linkedin", "") === "/qualify/linkedin");

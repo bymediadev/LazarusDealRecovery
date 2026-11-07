@@ -11,21 +11,24 @@
 }
 
 .ohq-launch {
-  border: 1px solid var(--amber);
-  background: var(--panel);
-  color: var(--amber);
+  border: 1px solid var(--panel-border);
+  background: rgba(12, 20, 51, 0.9);
+  color: var(--muted);
   font: inherit;
-  font-size: 0.82rem;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  padding: 0.65rem 1.05rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.45rem 0.8rem;
   border-radius: 999px;
   cursor: pointer;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
-.ohq-launch:hover {
-  background: rgba(201, 162, 39, 0.12);
+.ohq-launch:hover,
+.ohq-launch[aria-expanded="true"] {
+  border-color: rgba(61, 214, 198, 0.45);
+  color: var(--text);
+  background: rgba(61, 214, 198, 0.08);
 }
 
 .ohq-panel,

@@ -1,10 +1,8 @@
 import { useEffect, useState } from "react";
 import { navigateApp } from "../lib/appRoute";
-import { arrivalOpensNow, qualifySharePath, readArrival, type Arrival } from "./arrival";
+import { qualifySharePath, readArrival, type Arrival } from "./arrival";
 import OffHoursFunnel from "./OffHoursFunnel";
 import "./off-hours.css";
-
-const SEEN_KEY = "ldr-off-hours-seen";
 
 type Props = {
   mode: "page" | "dock";
@@ -17,7 +15,7 @@ export default function OffHoursQualifier({ mode, onOpenPortal }: Props) {
       ? "site"
       : readArrival(window.location.search, document.referrer, window.location.pathname)
   );
-  const [open, setOpen] = useState(mode === "page" || (mode === "dock" && arrivalOpensNow(arrival)));
+  const [open, setOpen] = useState(mode === "page");
 
   useEffect(() => {
     if (mode !== "dock" || typeof window === "undefined") return;
@@ -25,38 +23,6 @@ export default function OffHoursQualifier({ mode, onOpenPortal }: Props) {
     if (!path) return;
     navigateApp(path);
   }, [mode]);
-
-  useEffect(() => {
-    if (mode !== "dock" || arrivalOpensNow(arrival)) return;
-    try {
-      if (sessionStorage.getItem(SEEN_KEY) === "1") return;
-    } catch {
-      return;
-    }
-    const markSeen = () => {
-      try {
-        sessionStorage.setItem(SEEN_KEY, "1");
-      } catch {
-        /* private mode */
-      }
-    };
-    const openOnce = () => {
-      setOpen(true);
-      markSeen();
-    };
-    const timer = window.setTimeout(openOnce, 350);
-    const onScroll = () => {
-      if (window.scrollY < 48) return;
-      window.clearTimeout(timer);
-      openOnce();
-      window.removeEventListener("scroll", onScroll);
-    };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
-      window.clearTimeout(timer);
-      window.removeEventListener("scroll", onScroll);
-    };
-  }, [mode, arrival]);
 
   const funnel = (
     <OffHoursFunnel active={mode === "page" || open} arrival={arrival} onOpenPortal={onOpenPortal} />

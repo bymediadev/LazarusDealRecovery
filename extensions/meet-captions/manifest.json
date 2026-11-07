@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Lazarus Deal Recovery Widget",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "Send Google Meet live captions into Lazarus Deal Recovery after you turn Captions on. No Google OAuth.",
   "homepage_url": "https://www.getldr.ca",
   "icons": {
