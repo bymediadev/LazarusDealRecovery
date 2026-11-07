@@ -291,7 +291,9 @@ const openInputs = deriveCanonicalState(
   "TEMPORARY BLOCKERS",
   "missed the technical demo and asked to reschedule"
 ).frozen;
-const pinnedInputs = deriveCanonicalState(
+// Same temporary calendar gap, but the model omitted Intent and inflated weights.
+// Structural on a missed-demo gate must not pin the deal; weights lock to the gap band.
+const lockedGapInputs = deriveCanonicalState(
   [
     { factor: "Dave technical veto", type: "Structural", weight: 95, evidence: "He's the one who signs off on anything that routes near our OT network." },
     { factor: "Technical approval outstanding", type: "Constraint", weight: 90, evidence: "nothing's approved on the infrastructure side yet" },
@@ -301,24 +303,55 @@ const pinnedInputs = deriveCanonicalState(
   "TEMPORARY BLOCKERS",
   "missed the technical demo and asked to reschedule"
 ).frozen;
+const pinnedInputs = deriveCanonicalState(
+  [
+    {
+      factor: "Permanent architecture lock",
+      type: "Structural",
+      weight: 95,
+      evidence: "the architecture is structurally locked and permanently prohibited from change",
+    },
+    {
+      factor: "Board gate",
+      type: "Constraint",
+      weight: 90,
+      evidence: "board sign-off is required and nothing is approved",
+    },
+    { factor: "Budget modeled", type: "Enabler", weight: 40, evidence: "budget was modeled earlier" },
+  ],
+  "STRUCTURAL LOCK-INS",
+  "the evaluation was structurally locked with no missed demo"
+).frozen;
 check("the earlier input set stays open", openInputs.equilibrium_state === "OPEN" && openInputs.structural_lock_in === 0, openInputs);
 check(
-  "the earlier weights produce the higher viability",
-  openInputs.viability_score === 57 && openInputs.effective_intent === 13,
+  "temporary-gap weights lock viability on the calendar-miss path",
+  openInputs.viability_score === 56 &&
+    openInputs.intent_strength === 50 &&
+    openInputs.enabler_strength === 60 &&
+    openInputs.constraint_pressure === 90,
   { viability: openInputs.viability_score, effective: openInputs.effective_intent, structural: openInputs.structural_lock_in }
 );
 check(
-  "the later input set is pinned by the extracted weights",
+  "a Structural mislabel on a temporary gap stays open with locked weights",
+  lockedGapInputs.equilibrium_state === "OPEN" &&
+    lockedGapInputs.structural_lock_in === 0 &&
+    lockedGapInputs.constraint_pressure === 90 &&
+    lockedGapInputs.viability_score === 28,
+  lockedGapInputs
+);
+check("the later temporary-gap set has no extracted intent", lockedGapInputs.intent_strength === 0 && lockedGapInputs.effective_intent === 0, lockedGapInputs);
+check(
+  "a real freeze/audit path can still pin from structural weights",
   pinnedInputs.equilibrium_state === "PINNED" &&
     pinnedInputs.structural_lock_in === 95 &&
     pinnedInputs.constraint_pressure === 90,
   pinnedInputs
 );
-check("the later input set has no extracted intent", pinnedInputs.intent_strength === 0 && pinnedInputs.effective_intent === 0, pinnedInputs);
 check(
   "viability changed because the inputs changed",
-  openInputs.viability_score !== pinnedInputs.viability_score && pinnedInputs.viability_score === 18,
-  { open: openInputs.viability_score, pinned: pinnedInputs.viability_score }
+  openInputs.viability_score !== lockedGapInputs.viability_score &&
+    openInputs.viability_score !== pinnedInputs.viability_score,
+  { open: openInputs.viability_score, lockedGap: lockedGapInputs.viability_score, pinned: pinnedInputs.viability_score }
 );
 const zeroTrace = intentInputTrace(0, pinnedInputs.constraint_pressure, pinnedInputs.effective_intent);
 check("zero raw intent is not described as no interest", /not a finding that the buyer has no interest/i.test(zeroTrace), zeroTrace);
