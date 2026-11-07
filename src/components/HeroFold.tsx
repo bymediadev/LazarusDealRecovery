@@ -28,7 +28,7 @@ export default function HeroFold({ onScan }: { onScan: () => void }) {
       <section
         id="outcomes"
         aria-labelledby={headingId}
-        className="flex min-h-svh flex-col items-start px-5 pb-16 pt-10 sm:px-8 sm:pt-14 md:pb-20 lg:px-10 lg:pt-16"
+        className="flex flex-col items-start px-5 pb-10 pt-10 sm:px-8 sm:pt-12 lg:px-10 lg:pt-14"
       >
         <p className="mb-6 inline-flex w-fit items-center rounded-full border border-[#3dd6c6]/30 bg-[#0c1433] px-3 py-1 font-[var(--mono)] text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[#3dd6c6]">
           Purpose-built for Sales Managers
