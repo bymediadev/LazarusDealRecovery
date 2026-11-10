@@ -1,11 +1,12 @@
 import { PostMortemResult, StakeholderSignal } from "../types";
 import {
-  findEconomicDecisionMaker,
+  authorityRoleKind,
   findInvisibleVetoOrMissingAuthority,
   findTechnicalVetoHolder,
   formatAuthorityLabel,
+  type AuthorityPerson,
 } from "./authorityRoles";
-import { peopleMapRows } from "./evidenceAttribution";
+import { peopleMapRows, quotedSentenceAbout } from "./evidenceAttribution";
 import { formatDiagnosticMarkdown, matrixFacing, recommendedMoveLine, unifiedDealHeadline } from "./reportMatrix";
 import { formatMetricLegendMarkdown } from "./metricLegend";
 import { recoveryActionNote, uniqueRecoveryNotes } from "./recoveryPlan";
@@ -37,6 +38,21 @@ function facingFor(result: PostMortemResult) {
   });
 }
 
+function authorityValue(person: AuthorityPerson): string {
+  const role = person.role?.trim();
+  const who = role ? `${person.name.trim()} (${role})` : person.name.trim();
+  const kind = authorityRoleKind(person);
+  const reason =
+    kind === "technical_veto"
+      ? "technical approval dependency"
+      : kind === "absent_decision_maker"
+        ? "absent from the decision"
+        : kind === "hidden_detractor"
+          ? "hidden detractor"
+          : (person.persona_type || person.stance || "named in the evidence").trim();
+  return `${who}, ${reason}`;
+}
+
 function invisibleVetoHolder(result: PostMortemResult): string {
   const stakeholders = result.stakeholders ?? [];
   const technical = findTechnicalVetoHolder(stakeholders);
@@ -45,21 +61,10 @@ function invisibleVetoHolder(result: PostMortemResult): string {
     technical &&
     veto &&
     technical.name.trim().toLowerCase() === veto.name.trim().toLowerCase();
-  // An identified technical approver is not an unidentified veto.
-  if (technical && (!veto || samePerson)) {
-    return `None. ${formatAuthorityLabel(technical)} is the identified technical approval dependency.`;
-  }
-  if (veto) return formatAuthorityLabel(veto);
-  const owner = findEconomicDecisionMaker(stakeholders);
-  if (facingFor(result).offForecast) {
-    return owner
-      ? `None identified. ${owner.name} is the business owner and apparent decision-maker; no purchase process was established.`
-      : "None identified. No purchase process was established.";
-  }
-  if (owner) {
-    return `None. ${owner.name} is the owner and the authority.`;
-  }
-  return "Not identified — review People Map";
+  if (veto && !samePerson) return authorityValue(veto);
+  if (technical) return authorityValue(technical);
+  if (veto) return authorityValue(veto);
+  return "None identified.";
 }
 
 function coreBlocker(result: PostMortemResult): string {
@@ -112,17 +117,25 @@ function nextActionDate(result: PostMortemResult): string {
 
 function peopleMapEvidenceLine(
   person: StakeholderSignal,
-  rows: ReturnType<typeof peopleMapRows>
+  rows: ReturnType<typeof peopleMapRows>,
+  transcript: string
 ): string {
   const row = rows.find((item) => item.name === person.name);
-  if (row?.secondhandNote) {
-    return `  Evidence: not stated (${row.secondhandNote})`;
+  const firsthand = row?.quotes.find(
+    (quote) => quote.text.trim() && !/^not stated$/i.test(quote.text) && !/^about\s+/i.test(quote.note)
+  );
+  if (firsthand) {
+    const clipped = firsthand.text.length > 320 ? `${firsthand.text.slice(0, 320)}…` : firsthand.text;
+    return `  Evidence: "${clipped}"`;
   }
-  const quote = row?.quotes[0]?.text?.trim() || person.evidence?.replace(/^"|"$/g, "").trim() || "";
-  if (!quote || /^not stated$/i.test(quote)) return "  Evidence: not stated";
-  const clipped = quote.length > 220 ? `${quote.slice(0, 220)}…` : quote;
-  const note = row?.quotes[0]?.note ? ` (${row.quotes[0].note})` : "";
-  return `  Evidence: "${clipped}"${note}`;
+  const hint = person.evidence?.replace(/^"|"$/g, "").trim() ?? "";
+  const found = quotedSentenceAbout(transcript, person.name, /^not stated$/i.test(hint) ? "" : hint);
+  if (found) {
+    const clipped = found.text.length > 320 ? `${found.text.slice(0, 320)}…` : found.text;
+    const said = found.basis === "secondhand" && found.speaker ? ` (said by ${found.speaker})` : "";
+    return `  Evidence: "${clipped}"${said}`;
+  }
+  return "  Evidence: not stated";
 }
 
 function peopleByRole(result: PostMortemResult): string {
@@ -167,7 +180,7 @@ function peopleByRole(result: PostMortemResult): string {
     used.add(`${full.name}|${full.role}`);
     lines.push("**Technical approval dependency:**");
     lines.push(`- ${formatAuthorityLabel(full)}`);
-    lines.push(peopleMapEvidenceLine(full, rows));
+    lines.push(peopleMapEvidenceLine(full, rows, result.source_transcript ?? ""));
     lines.push("");
   }
 
@@ -180,7 +193,7 @@ function peopleByRole(result: PostMortemResult): string {
     for (const p of people) {
       used.add(`${p.name}|${p.role}`);
       lines.push(`- ${stakeholderLabel(p)}`);
-      lines.push(peopleMapEvidenceLine(p, rows));
+      lines.push(peopleMapEvidenceLine(p, rows, result.source_transcript ?? ""));
     }
     lines.push("");
   }
@@ -190,7 +203,7 @@ function peopleByRole(result: PostMortemResult): string {
     lines.push("**Other stakeholders:**");
     for (const p of others) {
       lines.push(`- ${stakeholderLabel(p)}`);
-      lines.push(peopleMapEvidenceLine(p, rows));
+      lines.push(peopleMapEvidenceLine(p, rows, result.source_transcript ?? ""));
     }
     lines.push("");
   }

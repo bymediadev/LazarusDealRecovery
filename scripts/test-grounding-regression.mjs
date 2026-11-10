@@ -130,7 +130,7 @@ if (!/Technical approval dependency/i.test(crm)) {
   console.error("REGRESSION FAILED: CRM people map missing technical approval dependency", crm);
   process.exit(1);
 }
-if (!/Dave \(VP of Infrastructure\) — technical approval dependency is the identified technical approval dependency/i.test(crm)) {
+if (!/Dave \(VP of Infrastructure\), technical approval dependency/i.test(crm)) {
   console.error("REGRESSION FAILED: CRM dropped the identified technical veto", crm.match(/Invisible veto[^\n]*/)?.[0]);
   process.exit(1);
 }

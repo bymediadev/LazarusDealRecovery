@@ -1098,10 +1098,33 @@ export interface UnifiedDealHeadlineInput {
   riskTier?: string | null;
 }
 
+function riskPhrase(input: UnifiedDealHeadlineInput): string {
+  const named = (input.riskTier ?? "").trim().toUpperCase();
+  const fromStatus = String(input.status ?? "").match(/\b(CRITICAL|HIGH|MODERATE|LOW)\b/i);
+  const token = named || fromStatus?.[1]?.toUpperCase() || "";
+  if (token === "CRITICAL") return "Critical risk";
+  if (token === "HIGH") return "High risk";
+  if (token === "MODERATE") return "Moderate risk";
+  if (token === "LOW") return "Low risk";
+  return "Low risk";
+}
+
+function statusWord(input: UnifiedDealHeadlineInput, facing: MatrixFacing): "Stalled" | "Open" | "Not a deal" {
+  if (facing.category === "not_a_deal" || facing.category === "unresolved") return "Not a deal";
+  if (/VELOCITY|ACTIVE|CLOSED\s*WON/i.test(`${input.trajectory ?? ""} ${input.status ?? ""}`)) return "Open";
+  return "Stalled";
+}
+
+function recoverWord(input: UnifiedDealHeadlineInput, facing: MatrixFacing): "Recoverable" | "Not recoverable" {
+  const blob = `${facing.recoverabilityLabel ?? ""} ${input.recoverabilityStatus ?? ""} ${input.trajectory ?? ""} ${input.viabilityState ?? ""}`;
+  if (facing.category === "not_a_deal" || facing.category === "unresolved") return "Not recoverable";
+  if (/not currently recoverable|flat_no|flat no|non-viable|not recoverable/i.test(blob)) return "Not recoverable";
+  return "Recoverable";
+}
+
 /**
- * Single deterministic top-line for the report header.
- * Format: `Stalled — Recoverable (Blocked on Dave)` or `Moderate risk — Recoverable with focused action`.
- * Never emits "Viability deferred", "Recoverability undetermined", or competing badge phrases.
+ * Single status line. The forecast judgment below carries the reason.
+ * Format: `Stalled · Moderate risk, Recoverable`.
  */
 export function unifiedDealHeadline(input: UnifiedDealHeadlineInput): {
   line: string;
@@ -1123,9 +1146,10 @@ export function unifiedDealHeadline(input: UnifiedDealHeadlineInput): {
     viabilityState: input.viabilityState,
   });
 
+  const line = `${statusWord(input, facing)} · ${riskPhrase(input)}, ${recoverWord(input, facing)}`;
   if (facing.category === "not_a_deal") {
     return {
-      line: "Not a deal — Flat no as a purchase (Keep off the forecast)",
+      line,
       facing,
       forecastLine: guidance.line,
       removeFromForecast: true,
@@ -1134,7 +1158,7 @@ export function unifiedDealHeadline(input: UnifiedDealHeadlineInput): {
   }
   if (facing.category === "unresolved") {
     return {
-      line: "Motion not established — Speakers unread (Keep off the forecast)",
+      line,
       facing,
       forecastLine: guidance.line,
       removeFromForecast: true,
@@ -1142,58 +1166,8 @@ export function unifiedDealHeadline(input: UnifiedDealHeadlineInput): {
     };
   }
 
-  const closedWon = /CLOSED\s*WON/i.test(input.status ?? "");
-  const closedLost = /CLOSED\s*LOST/i.test(input.status ?? "");
-  const moving = /VELOCITY|ACTIVE/i.test(input.trajectory ?? "");
-  const risk = (input.riskTier ?? "").trim().toUpperCase();
-  const riskBit =
-    risk === "CRITICAL"
-      ? "Critical risk"
-      : risk === "HIGH"
-        ? "High risk"
-        : risk === "MODERATE"
-          ? "Moderate risk"
-          : risk === "LOW"
-            ? "Low risk"
-            : "";
-
-  const statusBit = closedWon
-    ? "Closed-won"
-    : closedLost
-      ? "Closed-lost"
-      : moving
-        ? riskBit || "Moving"
-        : riskBit
-          ? `Stalled — ${riskBit}`
-          : "Stalled";
-
-  const recoverabilityRaw = facing.recoverabilityLabel?.trim() || "";
-  const recoverabilityBit = /undetermined|^—$/i.test(recoverabilityRaw)
-    ? /recoverable/i.test(input.trajectory ?? "")
-      ? "Recoverable"
-      : moving
-        ? "On track"
-        : "Path under review"
-    : recoverabilityRaw;
-
-  const blocked = input.blockedOn?.trim();
-  const pathBit = blocked
-    ? `Blocked on ${blocked}`
-    : guidance.removeFromForecast
-      ? "Keep off the forecast"
-      : /recoverable/i.test(recoverabilityBit) || /recoverable/i.test(input.trajectory ?? "")
-        ? "Recoverable with focused action"
-        : moving
-          ? "Protect momentum"
-          : "Owned next step required";
-
-  // Avoid "Stalled — Moderate risk — Recoverable …" triple dashes when status already embeds risk.
-  const head = statusBit.includes("—")
-    ? `${statusBit.replace(/^Stalled — /, "Stalled · ")} — ${recoverabilityBit}`
-    : `${statusBit} — ${recoverabilityBit}`;
-
   return {
-    line: `${head} (${pathBit})`,
+    line,
     facing,
     forecastLine: guidance.line,
     removeFromForecast: guidance.removeFromForecast,

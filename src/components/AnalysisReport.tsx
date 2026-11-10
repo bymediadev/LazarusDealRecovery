@@ -2,7 +2,7 @@ import { useState } from "react";
 import { saveRescueOutcome } from "../lib/api";
 import { alignBlockerNarrative } from "../lib/blockerNarrative";
 import { convergenceExplanation, viabilityCycleDisplay } from "../lib/convergenceNote";
-import { peopleMapRows } from "../lib/evidenceAttribution";
+import { peopleMapRows, quotedSentenceAbout } from "../lib/evidenceAttribution";
 import { dependencyRelationships, MISSING_DEPENDENCY_NOTE } from "../lib/forceGraph";
 import { pipelineReading } from "../lib/pipelineReading";
 import { recommendedMoveLine, unifiedDealHeadline } from "../lib/reportMatrix";
@@ -325,13 +325,17 @@ export default function AnalysisReport({
                     <td>{person.authority || "—"}</td>
                     <td>{person.persona || "—"}</td>
                     <td className="force-evidence">
-                      {person.quotes.map((quote) => (
-                        <div key={`${person.name}-${quote.text}-${quote.note}`}>
-                          <div>{/^not stated$/i.test(quote.text) ? quote.text : `"${quote.text}"`}</div>
-                          {quote.note && <p className="meta-line">{quote.note}</p>}
-                        </div>
-                      ))}
-                      {person.secondhandNote && <p className="meta-line">{person.secondhandNote}</p>}
+                      {(() => {
+                        const own = person.quotes.find(
+                          (quote) => quote.text.trim() && !/^not stated$/i.test(quote.text) && !/^about\s+/i.test(quote.note)
+                        );
+                        if (own) return <div>{`"${own.text}"`}</div>;
+                        const hint = (r.stakeholders ?? []).find((item) => item.name === person.name)?.evidence ?? "";
+                        const found = quotedSentenceAbout(r.source_transcript ?? "", person.name, hint);
+                        if (!found) return <div>not stated</div>;
+                        const said = found.basis === "secondhand" && found.speaker ? ` (said by ${found.speaker})` : "";
+                        return <div>{`"${found.text}"${said}`}</div>;
+                      })()}
                     </td>
                   </tr>
                 ))}

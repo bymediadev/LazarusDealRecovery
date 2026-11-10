@@ -1623,7 +1623,9 @@ if (
   !channelNotes.includes("invitation") ||
   channelMove.trim() !== tightMove ||
   /Activity|Current status|partnership|This is not a deal/i.test(channelMove) ||
-  /CRITICAL|Stall signals|weekly recovery|partnership|Why it's stuck|buying group|NOT A PURCHASE/i.test(channelNotes)
+  /Stall signals|weekly recovery|partnership|Why it's stuck|buying group|NOT A PURCHASE/i.test(
+    channelNotes.replace(/\*\*Deal status:\*\*[^\n]*/i, "")
+  )
 ) {
   console.error("FAIL: A referral overview stays out of stalled-deal metrics", channelMove, channelNotes);
   failed = true;
@@ -1653,7 +1655,7 @@ const wordNotes = formatCompressedCrmNotes({
 const wordMove = wordNotes.split("**Recommended next move:**")[1]?.split("\n")[0] ?? "";
 if (
   wordCategory !== "not_a_deal" ||
-  /CRITICAL|Stall signals|Deal Risk Score/i.test(wordNotes) ||
+  /Stall signals|Deal Risk Score/i.test(wordNotes.replace(/\*\*Deal status:\*\*[^\n]*/i, "")) ||
   !wordNotes.includes("Not a deal") ||
   wordMove.trim() !== "No purchase step was promised."
 ) {
@@ -1721,13 +1723,8 @@ const stalledHeadlineLine = unifiedDealHeadline({
   blockedOn: "Dave",
   recoverabilityScore: 40,
 }).line;
-if (
-  !/^Stalled/i.test(stalledHeadlineLine) ||
-  !/Recoverable/i.test(stalledHeadlineLine) ||
-  !/Blocked on Dave/i.test(stalledHeadlineLine) ||
-  /undetermined|Viability deferred/i.test(stalledHeadlineLine)
-) {
-  console.error("FAIL: Unified headline must consolidate status/recoverability/forecast", stalledHeadlineLine);
+if (stalledHeadlineLine !== "Stalled · High risk, Recoverable" || /\(/.test(stalledHeadlineLine)) {
+  console.error("FAIL: Unified headline must be one status string without a parenthetical reason", stalledHeadlineLine);
   failed = true;
 }
 const behavioralDave = deriveCanonicalState(

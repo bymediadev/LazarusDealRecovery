@@ -743,7 +743,7 @@ function qualitativeBand(value: number, cap = 100): string {
   return "high";
 }
 
-/** Internal audit string — no raw multipliers (× / 1.00 / 1.35) for customer surfaces. */
+/** Wording only. The numbers are the ones already computed. */
 function formatFormula(f: {
   intent_strength: number;
   constraint_pressure: number;
@@ -755,10 +755,22 @@ function formatFormula(f: {
   equilibrium_state: CanonicalEquilibrium;
   trajectory_type: CanonicalTrajectory;
 }): string {
+  const constraintDominant = f.constraint_pressure >= 80 && f.constraint_pressure > f.structural_lock_in;
+  const components: string[] = [];
+  if (constraintDominant) {
+    components.push(`Dominant factor: constraint (${f.constraint_pressure}).`);
+  } else {
+    if (f.constraint_pressure > 0) components.push(`Constraint ${f.constraint_pressure}.`);
+    if (f.structural_lock_in > 0) components.push(`Structural ${f.structural_lock_in}.`);
+    components.push(`Equilibrium ${f.equilibrium_state}.`);
+  }
   return [
-    `Effective intent ${qualitativeBand(f.effective_intent)} from intent ${qualitativeBand(f.intent_strength)}, constraint ${qualitativeBand(f.constraint_pressure)}, enabler ${qualitativeBand(f.enabler_strength)}.`,
-    `Viability ${f.viability_score}. Constraint ${f.constraint_pressure}. Structural ${f.structural_lock_in}.`,
-    `Equilibrium ${f.equilibrium_state}. Trajectory ${f.trajectory_type}.`,
+    `Effective intent: ${qualitativeBand(f.effective_intent)}.`,
+    `Constraint: ${qualitativeBand(f.constraint_pressure)}.`,
+    `Enabler: ${qualitativeBand(f.enabler_strength)}.`,
+    `Viability ${f.viability_score}.`,
+    ...components,
+    `Trajectory ${f.trajectory_type}.`,
   ].join(" ");
 }
 

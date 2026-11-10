@@ -247,6 +247,48 @@ export function attributeQuote(transcript: string, stakeholderName: string, quot
   };
 }
 
+/** A transcript sentence about this person. Secondhand when someone else said it. */
+export function quotedSentenceAbout(
+  transcript: string,
+  personName: string,
+  hint = ""
+): { text: string; speaker: string | null; basis: EvidenceBasis } | null {
+  const first = personName.trim().split(/\s+/)[0] ?? "";
+  if (first.length < 2) return null;
+  const mention = new RegExp(`\\b${first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+  const hintNorm = normalize(hint);
+  const speakers = parseSpeakers(transcript);
+  let best: { text: string; speaker: string | null; score: number } | null = null;
+
+  const consider = (speakerLabel: string, body: string) => {
+    if (!mention.test(body)) return;
+    const known = speakers.find((speaker) => speaker.alias.toLowerCase() === speakerLabel.toLowerCase());
+    const speaker =
+      known?.name ??
+      (speakers.some((item) => namesMatch(item.name, speakerLabel)) ? speakerLabel : speakerLabel || null);
+    const flat = normalize(body);
+    let score = Math.min(body.length, 180);
+    if (new RegExp(`^${first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(body.trim())) score += 20000;
+    if (hintNorm.length >= 24) {
+      for (let index = 0; index + 24 <= hintNorm.length; index += 8) {
+        if (flat.includes(hintNorm.slice(index, index + 24))) score += 500;
+      }
+    }
+    if (!best || score > best.score) best = { text: body.replace(/\s+/g, " ").trim(), speaker, score };
+  };
+
+  for (const turn of utterances(transcript)) consider(turn.alias, turn.body);
+  for (const turn of dialogueTurns(transcript)) consider(turn.speaker, turn.text);
+
+  if (!best) return null;
+  const firsthand = Boolean(best.speaker) && namesMatch(best.speaker, personName);
+  return {
+    text: best.text,
+    speaker: best.speaker,
+    basis: firsthand ? "firsthand" : "secondhand",
+  };
+}
+
 const NOT_STATED = "not stated";
 
 /**

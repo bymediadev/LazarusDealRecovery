@@ -352,12 +352,41 @@ const crm = formatCompressedCrmNotes({
 });
 check(
   "CRM names Dave as the technical veto and does not call him unidentified",
-  /Invisible veto \/ missing authority:\*\* None\. Dave \(VP of Infrastructure\) — technical approval dependency is the identified technical approval dependency\./i.test(
-    crm
-  ) &&
+  /\*\*Invisible veto \/ missing authority:\*\* Dave \(VP of Infrastructure\), technical approval dependency/.test(crm) &&
     /Technical approval dependency:\*\*\s*\n- Dave \(VP of Infrastructure\)/i.test(crm) &&
-    !/Invisible veto \/ missing authority:\*\* Not identified/i.test(crm),
+    !/Invisible veto \/ missing authority:\*\* None identified/i.test(crm) &&
+    !/is the identified technical approval dependency/i.test(crm),
   crm.match(/Invisible veto[^\n]*/)?.[0]
+);
+check(
+  "why it's stuck states each level once",
+  !/ from /i.test(frozen.derivation_formula) &&
+    /Effective intent: \w+\./.test(frozen.derivation_formula) &&
+    /Constraint: \w+\./.test(frozen.derivation_formula) &&
+    /Enabler: \w+\./.test(frozen.derivation_formula),
+  frozen.derivation_formula
+);
+check(
+  "a dominant constraint is not printed beside a zero structural score",
+  frozen.constraint_pressure < 80 ||
+    (/Dominant factor: constraint \(\d+\)/.test(frozen.derivation_formula) &&
+      !/Structural 0/.test(frozen.derivation_formula) &&
+      !/Equilibrium /.test(frozen.derivation_formula)),
+  frozen.derivation_formula
+);
+check(
+  "Dave's people-map line quotes Mark's sentence",
+  /Evidence: "Dave is skeptical of anything that touches our production VLAN[^"]*" \(said by Mark O'Brien\)/.test(
+    crm
+  ) && !/Evidence: not stated \(No firsthand/.test(crm),
+  crm.match(/Evidence: "Dave[^"]*" \(said by [^)]+\)/)?.[0]
+);
+check(
+  "status line is one string and the forecast line carries the reason",
+  /^Stalled · (Low|Moderate|High|Critical) risk, Recoverable$/.test(headline.line) &&
+    !/\(/.test(headline.line) &&
+    headline.forecastLine.length > 0,
+  { line: headline.line, forecast: headline.forecastLine }
 );
 check(
   "CRM deal risk is the scored index, not the scale denominator",
