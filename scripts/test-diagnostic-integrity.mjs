@@ -352,10 +352,10 @@ const crm = formatCompressedCrmNotes({
 });
 check(
   "CRM names Dave as the technical veto and does not call him unidentified",
-  /\*\*Invisible veto \/ missing authority:\*\* Dave \(VP of Infrastructure\), technical approval dependency/.test(crm) &&
+  /No missing authority\. Dave, VP of Infrastructure, is the technical approval dependency/.test(crm) &&
     /Technical approval dependency:\*\*\s*\n- Dave \(VP of Infrastructure\)/i.test(crm) &&
     !/Invisible veto \/ missing authority:\*\* None identified/i.test(crm) &&
-    !/is the identified technical approval dependency/i.test(crm),
+    !crm.includes(["is the", "identified"].join(" ")),
   crm.match(/Invisible veto[^\n]*/)?.[0]
 );
 check(
@@ -376,10 +376,9 @@ check(
 );
 check(
   "Dave's people-map line quotes Mark's sentence",
-  /Evidence: "Dave is skeptical of anything that touches our production VLAN[^"]*" \(said by Mark O'Brien\)/.test(
-    crm
-  ) && !/Evidence: not stated \(No firsthand/.test(crm),
-  crm.match(/Evidence: "Dave[^"]*" \(said by [^)]+\)/)?.[0]
+  /Evidence: "Without him, I'm not moving this forward\." \(said by Mark O'Brien\)/.test(crm) &&
+    !/not stated/i.test(crm.match(/Technical approval dependency:[\s\S]*?\n\n/)?.[0] ?? ""),
+  crm.match(/Evidence: "Without him[^"]*" \(said by [^)]+\)/)?.[0]
 );
 check(
   "status line is one string and the forecast line carries the reason",

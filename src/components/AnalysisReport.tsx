@@ -2,12 +2,14 @@ import { useState } from "react";
 import { saveRescueOutcome } from "../lib/api";
 import { alignBlockerNarrative } from "../lib/blockerNarrative";
 import { convergenceExplanation, viabilityCycleDisplay } from "../lib/convergenceNote";
-import { peopleMapRows, quotedSentenceAbout } from "../lib/evidenceAttribution";
+import { peopleMapRows } from "../lib/evidenceAttribution";
 import { dependencyRelationships, MISSING_DEPENDENCY_NOTE } from "../lib/forceGraph";
 import { pipelineReading } from "../lib/pipelineReading";
 import { recommendedMoveLine, unifiedDealHeadline } from "../lib/reportMatrix";
 import { recoveryActionLines, uniqueRecoveryNotes } from "../lib/recoveryPlan";
 import { intentInputTrace, pinnedEquilibriumNote } from "../lib/scoreInputTrace";
+import { metricRendersBesideRisk, statusRendersBesideRisk } from "../lib/metricLegend";
+import { decisiveSentence, spokenBy } from "../lib/reportCopy";
 import { TRIGGER_ESTIMATE_NOTE, triggerLikelihood } from "../lib/triggerEstimate";
 import ConciseDiagnostic from "./ConciseDiagnostic";
 import ExecutiveBrief from "./ExecutiveBrief";
@@ -326,15 +328,24 @@ export default function AnalysisReport({
                     <td>{person.persona || "—"}</td>
                     <td className="force-evidence">
                       {(() => {
+                        const transcript = r.source_transcript ?? "";
                         const own = person.quotes.find(
-                          (quote) => quote.text.trim() && !/^not stated$/i.test(quote.text) && !/^about\s+/i.test(quote.note)
+                          (quote) =>
+                            quote.text.trim() &&
+                            !/^not stated$/i.test(quote.text) &&
+                            !/^about\s+/i.test(quote.note) &&
+                            transcript.includes(quote.text)
                         );
                         if (own) return <div>{`"${own.text}"`}</div>;
-                        const hint = (r.stakeholders ?? []).find((item) => item.name === person.name)?.evidence ?? "";
-                        const found = quotedSentenceAbout(r.source_transcript ?? "", person.name, hint);
-                        if (!found) return <div>not stated</div>;
-                        const said = found.basis === "secondhand" && found.speaker ? ` (said by ${found.speaker})` : "";
-                        return <div>{`"${found.text}"${said}`}</div>;
+                        const decisive = decisiveSentence(transcript, person.name);
+                        if (decisive && transcript.includes(decisive.text)) {
+                          const said =
+                            decisive.speaker && !spokenBy(decisive.speaker, person.name)
+                              ? ` (said by ${decisive.speaker})`
+                              : "";
+                          return <div>{`"${decisive.text}"${said}`}</div>;
+                        }
+                        return <div>No firsthand statement.</div>;
                       })()}
                     </td>
                   </tr>
@@ -461,7 +472,17 @@ export default function AnalysisReport({
       {(() => {
         const relationships = dependencyRelationships(fdg);
         const namedParents = fdg.parent_forces.some((parent) => parent.force?.trim());
-        if (relationships.status === "unavailable" && !namedParents) return null;
+        if (
+          relationships.status === "unavailable" &&
+          (!namedParents ||
+            !statusRendersBesideRisk(
+              relationships.status,
+              r.proprietary_indices?.risk_tier,
+              r.proprietary_indices?.deal_risk_index
+            ))
+        ) {
+          return null;
+        }
         return (
           <article className="card card-neutral">
             <h2 className="card-title">Force Dependency Graph</h2>
@@ -547,17 +568,31 @@ export default function AnalysisReport({
             <span className={`viability-badge ${viabilityClass}`}>
               {facing.offForecast ? facing.categoryLabel : headline.line}
             </span>
-            {!facing.offForecast && (
+            {!facing.offForecast &&
+              metricRendersBesideRisk(
+                vs.viability_score,
+                r.proprietary_indices?.risk_tier,
+                r.proprietary_indices?.deal_risk_index
+              ) && (
               <span className="viability-score">{vs.viability_score}/100</span>
             )}
           </div>
-          <p className="equilibrium-derivation">{readableEquilibriumText(vs.equilibrium_derivation)}</p>
+          <p className="equilibrium-derivation">
+            {(r.proprietary_indices?.deal_risk_index ?? 0) > 70
+              ? readableEquilibriumText(vs.equilibrium_derivation)
+                  .split(/(?<=\.)\s+/)
+                  .filter((sentence) => !/\bStructural 0\b/.test(sentence))
+                  .join(" ")
+              : readableEquilibriumText(vs.equilibrium_derivation)}
+          </p>
           {dc_comp && (
             <p className="meta-line" style={{ marginTop: "0.5rem" }}>
               {intentInputTrace(
                 dc_comp.intent_strength,
                 dc_comp.constraint_pressure,
-                Number(r.buyer_state?.effective_intent ?? 0)
+                Number(r.buyer_state?.effective_intent ?? 0),
+                (r.causal_forces ?? []).find((force) => force.type === "Constraint" || force.type === "Structural")
+                  ?.factor
               )}
             </p>
           )}
@@ -570,7 +605,11 @@ export default function AnalysisReport({
                   ["Structural", dc_comp.structural_lock_in_impact],
                   ["Timing", dc_comp.timing_accessibility],
                 ] as const
-              ).map(([label, value]) => {
+              )
+                .filter(([, value]) =>
+                  metricRendersBesideRisk(value, r.proprietary_indices?.risk_tier, r.proprietary_indices?.deal_risk_index)
+                )
+                .map(([label, value]) => {
                 const level =
                   value < 25 ? "low" : value < 55 ? "moderate" : value < 80 ? "elevated" : "high";
                 const width =

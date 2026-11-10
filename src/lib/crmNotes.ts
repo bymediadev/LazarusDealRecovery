@@ -1,15 +1,15 @@
 import { PostMortemResult, StakeholderSignal } from "../types";
 import {
-  authorityRoleKind,
   findInvisibleVetoOrMissingAuthority,
   findTechnicalVetoHolder,
   formatAuthorityLabel,
-  type AuthorityPerson,
 } from "./authorityRoles";
-import { peopleMapRows, quotedSentenceAbout } from "./evidenceAttribution";
+import { peopleMapRows } from "./evidenceAttribution";
 import { formatDiagnosticMarkdown, matrixFacing, recommendedMoveLine, unifiedDealHeadline } from "./reportMatrix";
-import { formatMetricLegendMarkdown } from "./metricLegend";
-import { recoveryActionNote, uniqueRecoveryNotes } from "./recoveryPlan";
+import { formatMetricLegendMarkdown, metricRendersBesideRisk } from "./metricLegend";
+import { recoveryActionNote, uniqueRecoveryNotes, formatRecoveryAction } from "./recoveryPlan";
+import { decisiveSentence, reportRootIssue, spokenBy, verbatimQuote } from "./reportCopy";
+import { intentInputTrace } from "./scoreInputTrace";
 
 function bulletList(items: string[], empty = "—"): string {
   if (!items.length) return empty;
@@ -38,33 +38,49 @@ function facingFor(result: PostMortemResult) {
   });
 }
 
-function authorityValue(person: AuthorityPerson): string {
-  const role = person.role?.trim();
-  const who = role ? `${person.name.trim()} (${role})` : person.name.trim();
-  const kind = authorityRoleKind(person);
-  const reason =
-    kind === "technical_veto"
-      ? "technical approval dependency"
-      : kind === "absent_decision_maker"
-        ? "absent from the decision"
-        : kind === "hidden_detractor"
-          ? "hidden detractor"
-          : (person.persona_type || person.stance || "named in the evidence").trim();
-  return `${who}, ${reason}`;
+type ActionIndex = Map<string, number>;
+
+function registerAction(index: ActionIndex, action: string): { number: number; repeat: boolean } {
+  const key = formatRecoveryAction(action)
+    .action.toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  const prior = index.get(key);
+  if (prior) return { number: prior, repeat: true };
+  const number = index.size + 1;
+  index.set(key, number);
+  return { number, repeat: false };
 }
 
 function invisibleVetoHolder(result: PostMortemResult): string {
   const stakeholders = result.stakeholders ?? [];
   const technical = findTechnicalVetoHolder(stakeholders);
-  const veto = findInvisibleVetoOrMissingAuthority(stakeholders);
-  const samePerson =
-    technical &&
-    veto &&
-    technical.name.trim().toLowerCase() === veto.name.trim().toLowerCase();
-  if (veto && !samePerson) return authorityValue(veto);
-  if (technical) return authorityValue(technical);
-  if (veto) return authorityValue(veto);
-  return "None identified.";
+  const missing = findInvisibleVetoOrMissingAuthority(stakeholders);
+  const transcript = result.source_transcript ?? "";
+  // A mapped person appears in the deal. "Never appears" is only for a role nobody holds.
+  if (technical) {
+    const title = technical.role?.trim() || "technical approver";
+    const clause = verbatimQuote(transcript, decisiveSentence(transcript, technical.name)?.text ?? "");
+    const why = clause ? `: ${clause}` : "";
+    return `No missing authority. ${technical.name.trim()}, ${title}, is the technical approval dependency${why}`;
+  }
+  if (missing && !stakeholders.some((person) => person.name.trim().toLowerCase() === missing.name.trim().toLowerCase())) {
+    const role = missing.role?.trim() || missing.persona_type?.trim() || "Decision maker";
+    return `Missing authority: ${role} never appears in this deal.`;
+  }
+  return "No missing authority.";
+}
+
+function intentCopy(result: PostMortemResult): string | null {
+  const components = result.viability_state?.derivation_components;
+  const raw = Number(result.buyer_state?.intent_strength ?? components?.intent_strength);
+  const constraint = Number(result.buyer_state?.constraint_pressure ?? components?.constraint_pressure);
+  const effective = Number(result.buyer_state?.effective_intent ?? components?.intent_strength);
+  if (!Number.isFinite(effective)) return null;
+  const named =
+    (result.causal_forces ?? []).find((force) => force.type === "Constraint" || force.type === "Structural")?.factor?.trim() ??
+    "";
+  return intentInputTrace(Number.isFinite(raw) ? raw : 0, Number.isFinite(constraint) ? constraint : 0, effective, named);
 }
 
 function coreBlocker(result: PostMortemResult): string {
@@ -125,17 +141,16 @@ function peopleMapEvidenceLine(
     (quote) => quote.text.trim() && !/^not stated$/i.test(quote.text) && !/^about\s+/i.test(quote.note)
   );
   if (firsthand) {
-    const clipped = firsthand.text.length > 320 ? `${firsthand.text.slice(0, 320)}…` : firsthand.text;
-    return `  Evidence: "${clipped}"`;
+    const quote = verbatimQuote(transcript, firsthand.text);
+    if (quote) return `  Evidence: "${quote}"`;
   }
-  const hint = person.evidence?.replace(/^"|"$/g, "").trim() ?? "";
-  const found = quotedSentenceAbout(transcript, person.name, /^not stated$/i.test(hint) ? "" : hint);
-  if (found) {
-    const clipped = found.text.length > 320 ? `${found.text.slice(0, 320)}…` : found.text;
-    const said = found.basis === "secondhand" && found.speaker ? ` (said by ${found.speaker})` : "";
-    return `  Evidence: "${clipped}"${said}`;
+  const decisive = decisiveSentence(transcript, person.name);
+  const quote = verbatimQuote(transcript, decisive?.text ?? "");
+  if (quote && decisive) {
+    const said = decisive.speaker && !spokenBy(decisive.speaker, person.name) ? ` (said by ${decisive.speaker})` : "";
+    return `  Evidence: "${quote}"${said}`;
   }
-  return "  Evidence: not stated";
+  return "  No firsthand statement.";
 }
 
 function peopleByRole(result: PostMortemResult): string {
@@ -211,7 +226,7 @@ function peopleByRole(result: PostMortemResult): string {
   return lines.join("\n").trimEnd();
 }
 
-function whoDoesWhat(result: PostMortemResult): string {
+function whoDoesWhat(result: PostMortemResult, actions: ActionIndex): string {
   const lines: string[] = [];
   const stakeholders = result.stakeholders ?? [];
   const champion = stakeholders.find((s) =>
@@ -265,13 +280,18 @@ function whoDoesWhat(result: PostMortemResult): string {
   if (notADeal) {
     lines.push(`- **Recommended next move:** ${recommendedMoveLine(promised)}`);
   } else if (crmNext) {
-    lines.push(`- **Recommended next move:** ${recoveryActionNote(crmNext).replace(/\n/g, "; ")}`);
+    const slot = registerAction(actions, crmNext);
+    lines.push(
+      slot.repeat
+        ? `- **Recommended next move:** See ${slot.number}.`
+        : `- **Recommended next move:** ${slot.number}. ${recoveryActionNote(crmNext).replace(/\n/g, "; ")}`
+    );
   }
 
   return lines.join("\n");
 }
 
-function whatToDo(result: PostMortemResult): string {
+function whatToDo(result: PostMortemResult, actions: ActionIndex): string {
   const notADeal = facingFor(result).offForecast;
   const immediate = result.immediate_remediation ?? [];
   const plan = result.rescue_triage_plan ?? {
@@ -294,14 +314,12 @@ function whatToDo(result: PostMortemResult): string {
     ...plan.long_term_90_plus_days,
   ];
 
-  const seen = new Set<string>();
   const sections: string[] = [];
   const section = (title: string, items: string[], empty?: string) => {
-    const notes = uniqueRecoveryNotes(items).filter((note) => {
-      const key = note.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
+    const notes = uniqueRecoveryNotes(items).map((note) => {
+      const slot = registerAction(actions, note);
+      if (slot.repeat) return `See ${slot.number}.`;
+      return `${slot.number}. ${note.replace(/\n/g, "\n   ")}`;
     });
     if (!notes.length) {
       if (!empty) return;
@@ -310,7 +328,7 @@ function whatToDo(result: PostMortemResult): string {
       return;
     }
     sections.push(`**${title}:**`);
-    sections.push(notes.map((note, i) => `${i + 1}. ${note.replace(/\n/g, "\n   ")}`).join("\n"));
+    sections.push(notes.join("\n"));
   };
 
   if (notADeal) {
@@ -346,32 +364,32 @@ function whatToDo(result: PostMortemResult): string {
 function frictionExtras(result: PostMortemResult): string[] {
   const items: string[] = [];
   const f = result.friction_deltas;
+  const transcript = result.source_transcript ?? "";
   if (!f) return items;
+  const quoted = (label: string, evidence: string) => {
+    const quote = verbatimQuote(transcript, evidence);
+    if (!quote) return;
+    items.push(`${label} — "${quote}"`);
+  };
   if (f.administrative_gatekeeping.detected) {
-    items.push(
-      `Administrative gatekeeping${f.administrative_gatekeeping.evidence ? ` — "${f.administrative_gatekeeping.evidence}"` : ""}`
-    );
+    quoted("Administrative gatekeeping", f.administrative_gatekeeping.evidence);
   }
   if (f.stakeholder_dispersion.detected) {
-    const names = f.stakeholder_dispersion.unmapped_names?.length
-      ? ` (${f.stakeholder_dispersion.unmapped_names.join(", ")})`
-      : "";
-    items.push(
-      `Stakeholder dispersion${names}${f.stakeholder_dispersion.evidence ? ` — "${f.stakeholder_dispersion.evidence}"` : ""}`
-    );
+    quoted("Stakeholder dispersion", f.stakeholder_dispersion.evidence);
   }
   if (f.budget_scoping_gap.detected) {
-    items.push(
-      `Budget scoping gap${f.budget_scoping_gap.evidence ? ` — "${f.budget_scoping_gap.evidence}"` : ""}`
-    );
+    quoted("Budget scoping gap", f.budget_scoping_gap.evidence);
   }
   return items;
 }
 
 function historicalExtras(result: PostMortemResult): string[] {
-  return (result.historical_context_match ?? []).slice(0, 4).map((m) => {
+  const transcript = result.source_transcript ?? "";
+  return (result.historical_context_match ?? []).slice(0, 4).flatMap((m) => {
+    const quote = verbatimQuote(transcript, m.live_dialogue_evidence ?? "");
+    if (!quote) return [];
     const prior = m.historical_event ? ` Prior: ${m.historical_event}` : "";
-    return `${m.reference_date} · ${m.conflict_type} — "${m.live_dialogue_evidence}"${prior}`;
+    return [`${m.reference_date} · ${m.conflict_type} — "${quote}"${prior}`];
   });
 }
 
@@ -385,16 +403,23 @@ function metricsBlock(result: PostMortemResult): string {
   const vs = result.viability_state;
   const lines: string[] = [];
 
+  const elevated = pi?.risk_tier === "HIGH" || pi?.risk_tier === "CRITICAL" || (pi?.deal_risk_index ?? 0) > 70;
+  const pushScore = (label: string, value: number | undefined) => {
+    if (!metricRendersBesideRisk(value, pi?.risk_tier, pi?.deal_risk_index)) return;
+    lines.push(`- **${label}:** ${value}/100`);
+  };
   if (pi) {
-    lines.push(`- **Deal Risk Score:** ${pi.deal_risk_index}/100 (${pi.risk_tier})`);
-    lines.push(`- **Department Friction (DFI):** ${pi.multi_department_friction}/100`);
-    lines.push(`- **Dispersion:** ${pi.stakeholder_dispersion_index}/100`);
-    lines.push(`- **Stall signals:** ${pi.dialogue_stall_score}/100`);
+    if (!(elevated && pi.deal_risk_index === 0)) {
+      lines.push(`- **Deal Risk Score:** ${pi.deal_risk_index}/100 (${pi.risk_tier})`);
+    }
+    pushScore("Department Friction (DFI)", pi.multi_department_friction);
+    pushScore("Dispersion", pi.stakeholder_dispersion_index);
+    pushScore("Stall signals", pi.dialogue_stall_score);
     if (pi.authority_gap_flag) lines.push("- **Authority gap:** Yes");
   } else if (triage && triage.department_friction_index > 0) {
     lines.push(`- **Department friction index:** ${triage.department_friction_index}/100`);
   }
-  if (vs && !facing.offForecast) {
+  if (vs && !facing.offForecast && metricRendersBesideRisk(vs.viability_score, pi?.risk_tier, pi?.deal_risk_index)) {
     lines.push(`- **Viability score:** ${vs.viability_score}/100`);
   }
   return lines.length ? lines.join("\n") : "- Metrics not available for this run.";
@@ -426,11 +451,9 @@ export function formatCompressedCrmNotes(result: PostMortemResult): string {
     recoverabilityScore: result.viability_state?.viability_score ?? result.recoverability_score,
     riskTier: result.proprietary_indices?.risk_tier,
   });
-  const rootIssue =
-    result.live_deal_triage?.root_issue?.trim() ||
-    result.executive_summary?.trim() ||
-    result.diagnosis?.trim() ||
-    "Stalled sequence — see blocker";
+  const rootIssue = reportRootIssue(result);
+  const intent = intentCopy(result);
+  const actions = new Map<string, number>();
   const blocker =
     result.live_deal_triage?.core_blocker?.trim() || coreBlocker(result);
   const veto = invisibleVetoHolder(result);
@@ -439,13 +462,14 @@ export function formatCompressedCrmNotes(result: PostMortemResult): string {
   const friction = notADeal ? [] : frictionExtras(result);
   const history = historicalExtras(result);
 
-  return [
+  const rendered = [
     `## Lazarus Deal Recovery Overview — ${client}`,
     "",
     "### Exactly what's going on",
     `**Deal status:** ${headline.line}`,
     `**Forecast judgment:** ${headline.forecastLine}`,
     `**Root issue:** ${rootIssue}`,
+    intent ? `**Intent:** ${intent}` : null,
     `**Core blocker:** ${blocker}`,
     `**Invisible veto / missing authority:** ${veto}`,
     eqNote ? `**Why it's stuck:** ${eqNote}` : null,
@@ -453,7 +477,7 @@ export function formatCompressedCrmNotes(result: PostMortemResult): string {
     result.diagnostic_profile ? formatDiagnosticMarkdown(result.diagnostic_profile) : null,
     result.diagnostic_profile ? "" : null,
     "### Who needs to do what",
-    whoDoesWhat(result),
+    whoDoesWhat(result, actions),
     "",
     notADeal ? "### People" : "### People map",
     peopleByRole(result),
@@ -461,7 +485,7 @@ export function formatCompressedCrmNotes(result: PostMortemResult): string {
     "### What to do",
     `**Next action date:** ${nextDate}`,
     "",
-    whatToDo(result),
+    whatToDo(result, actions),
     "",
     "### Snapshot metrics",
     metricsBlock(result),
@@ -477,15 +501,67 @@ export function formatCompressedCrmNotes(result: PostMortemResult): string {
     notADeal
       ? null
       : formatMetricLegendMarkdown({
-          deal_risk_index: result.proprietary_indices?.deal_risk_index,
-          multi_department_friction: result.proprietary_indices?.multi_department_friction,
-          stakeholder_dispersion_index: result.proprietary_indices?.stakeholder_dispersion_index,
-          dialogue_stall_score: result.proprietary_indices?.dialogue_stall_score,
-          viability_score: result.viability_state?.viability_score,
+          deal_risk_index: metricRendersBesideRisk(
+            result.proprietary_indices?.deal_risk_index,
+            result.proprietary_indices?.risk_tier,
+            result.proprietary_indices?.deal_risk_index
+          )
+            ? result.proprietary_indices?.deal_risk_index
+            : undefined,
+          multi_department_friction: metricRendersBesideRisk(
+            result.proprietary_indices?.multi_department_friction,
+            result.proprietary_indices?.risk_tier,
+            result.proprietary_indices?.deal_risk_index
+          )
+            ? result.proprietary_indices?.multi_department_friction
+            : undefined,
+          stakeholder_dispersion_index: metricRendersBesideRisk(
+            result.proprietary_indices?.stakeholder_dispersion_index,
+            result.proprietary_indices?.risk_tier,
+            result.proprietary_indices?.deal_risk_index
+          )
+            ? result.proprietary_indices?.stakeholder_dispersion_index
+            : undefined,
+          dialogue_stall_score: metricRendersBesideRisk(
+            result.proprietary_indices?.dialogue_stall_score,
+            result.proprietary_indices?.risk_tier,
+            result.proprietary_indices?.deal_risk_index
+          )
+            ? result.proprietary_indices?.dialogue_stall_score
+            : undefined,
+          viability_score: metricRendersBesideRisk(
+            result.viability_state?.viability_score,
+            result.proprietary_indices?.risk_tier,
+            result.proprietary_indices?.deal_risk_index
+          )
+            ? result.viability_state?.viability_score
+            : undefined,
         }),
     notADeal ? null : "",
     `*Generated by Lazarus Deal Recovery · ${new Date().toISOString().slice(0, 10)}*`,
   ]
     .filter((line) => line !== null)
+    .join("\n");
+  const dealRisk = result.proprietary_indices?.deal_risk_index;
+  const tier = result.proprietary_indices?.risk_tier;
+  const hideStructuralZero = tier === "HIGH" || tier === "CRITICAL" || (typeof dealRisk === "number" && dealRisk > 70);
+  const withoutStructuralZero = hideStructuralZero
+    ? rendered
+        .split("\n")
+        .flatMap((line) => {
+          const next = line.replace(/\bStructural 0\b\.?\s*/g, "");
+          if (!next.trim() && line.trim()) return [];
+          return [next];
+        })
+        .join("\n")
+    : rendered;
+  const transcript = result.source_transcript ?? "";
+  if (!transcript) return withoutStructuralZero;
+  return withoutStructuralZero
+    .split("\n")
+    .filter((line) => {
+      const quotes = [...line.matchAll(/"([^"]*)"/g)].map((match) => match[1]);
+      return quotes.every((quote) => transcript.includes(quote));
+    })
     .join("\n");
 }

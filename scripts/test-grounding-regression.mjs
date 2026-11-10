@@ -130,8 +130,8 @@ if (!/Technical approval dependency/i.test(crm)) {
   console.error("REGRESSION FAILED: CRM people map missing technical approval dependency", crm);
   process.exit(1);
 }
-if (!/Dave \(VP of Infrastructure\), technical approval dependency/i.test(crm)) {
-  console.error("REGRESSION FAILED: CRM dropped the identified technical veto", crm.match(/Invisible veto[^\n]*/)?.[0]);
+if (!/No missing authority\. Dave, VP of Infrastructure, is the technical approval dependency/i.test(crm)) {
+  console.error("REGRESSION FAILED: CRM dropped the technical approval dependency", crm.match(/Invisible veto[^\n]*/)?.[0]);
   process.exit(1);
 }
 if (/\*\*Invisible veto \/ missing authority:\*\* Not identified\b/i.test(crm)) {

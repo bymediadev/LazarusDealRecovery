@@ -63,6 +63,28 @@ export const METRIC_LEGEND: readonly MetricLegendEntry[] = [
   },
 ] as const;
 
+/** A 0, or an unavailable status, stays off a HIGH or CRITICAL risk score. */
+export function metricRendersBesideRisk(
+  value: number | null | undefined,
+  riskTier?: string | null,
+  dealRisk?: number | null
+): boolean {
+  if (value == null || !Number.isFinite(Number(value))) return false;
+  const elevated = riskTier === "HIGH" || riskTier === "CRITICAL" || (dealRisk ?? 0) > 70;
+  if (elevated && Number(value) === 0) return false;
+  return true;
+}
+
+export function statusRendersBesideRisk(
+  status: string | null | undefined,
+  riskTier?: string | null,
+  dealRisk?: number | null
+): boolean {
+  const elevated = riskTier === "HIGH" || riskTier === "CRITICAL" || (dealRisk ?? 0) > 70;
+  if (elevated && String(status ?? "").toLowerCase() === "unavailable") return false;
+  return true;
+}
+
 /** Clamp to 0–100 for display. Real zeros stay 0. */
 export function formatScoreOutOf100(score: number | null | undefined): string {
   if (score == null || !Number.isFinite(Number(score))) return "—/100";

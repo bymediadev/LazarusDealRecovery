@@ -1,5 +1,5 @@
 import MetricGlossary from "./MetricGlossary";
-import { formatScoreOutOf100 } from "../lib/metricLegend";
+import { formatScoreOutOf100, metricRendersBesideRisk } from "../lib/metricLegend";
 import { driTagClass, type ProprietaryIndices } from "../types";
 
 interface Props {
@@ -47,12 +47,14 @@ export default function DealHeaderMetrics({
     );
   }
   const driClass = driTagClass(pi.risk_tier);
+  const show = (value: number | null | undefined) =>
+    metricRendersBesideRisk(value, pi.risk_tier, pi.deal_risk_index);
   const legendScores = {
-    deal_risk_index: pi.deal_risk_index,
-    multi_department_friction: pi.multi_department_friction,
-    stakeholder_dispersion_index: pi.stakeholder_dispersion_index,
-    dialogue_stall_score: pi.dialogue_stall_score,
-    viability_score: viabilityScore,
+    deal_risk_index: show(pi.deal_risk_index) ? pi.deal_risk_index : undefined,
+    multi_department_friction: show(pi.multi_department_friction) ? pi.multi_department_friction : undefined,
+    stakeholder_dispersion_index: show(pi.stakeholder_dispersion_index) ? pi.stakeholder_dispersion_index : undefined,
+    dialogue_stall_score: show(pi.dialogue_stall_score) ? pi.dialogue_stall_score : undefined,
+    viability_score: show(viabilityScore) ? viabilityScore : undefined,
   };
 
   return (
@@ -62,6 +64,7 @@ export default function DealHeaderMetrics({
         <MetricGlossary variant="icon" scores={legendScores} />
       </div>
       <div className="deal-metric-grid deal-metric-grid-five">
+        {show(pi.deal_risk_index) && (
         <MetricCard
           label="Deal Risk Score"
           value={formatScoreOutOf100(pi.deal_risk_index)}
@@ -71,6 +74,8 @@ export default function DealHeaderMetrics({
           }
           accentClass={driClass}
         />
+        )}
+        {show(pi.multi_department_friction) && (
         <MetricCard
           label="Dept friction (DFI)"
           value={formatScoreOutOf100(pi.multi_department_friction)}
@@ -79,6 +84,8 @@ export default function DealHeaderMetrics({
             "Department words in the stakeholder text. A word match is not resistance."
           }
         />
+        )}
+        {show(pi.stakeholder_dispersion_index) && (
         <MetricCard
           label="Dispersion"
           value={formatScoreOutOf100(pi.stakeholder_dispersion_index)}
@@ -87,6 +94,8 @@ export default function DealHeaderMetrics({
             "How split the mapped stakeholders are. Only the supplied people count."
           }
         />
+        )}
+        {show(pi.dialogue_stall_score) && (
         <MetricCard
           label="Stall signals"
           value={formatScoreOutOf100(pi.dialogue_stall_score)}
@@ -95,6 +104,8 @@ export default function DealHeaderMetrics({
             "Deferral language in the text. A delayed meeting is not a rejection."
           }
         />
+        )}
+        {show(viabilityScore) && (
         <MetricCard
           label="Viability"
           value={formatScoreOutOf100(viabilityScore)}
@@ -111,6 +122,7 @@ export default function DealHeaderMetrics({
               .join(" ")
           }
         />
+        )}
       </div>
     </section>
   );

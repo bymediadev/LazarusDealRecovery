@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { findInvisibleVetoOrMissingAuthority, findTechnicalVetoHolder, formatAuthorityLabel } from "../lib/authorityRoles";
 import { formatCompressedCrmNotes } from "../lib/crmNotes";
+import { decisiveSentence, reportRootIssue, spokenBy, verbatimQuote } from "../lib/reportCopy";
 import { PostMortemResult, RescueTriagePlan, StakeholderSignal } from "../types";
 
 interface Props {
@@ -169,9 +170,9 @@ export default function ConciseDiagnostic({ result }: Props) {
         <article className="card card-amber concise-card">
           <h2 className="card-title">Live Deal Triage</h2>
           <div className="card-body">
-            {triage.root_issue && (
+            {(triage.root_issue || triage.core_blocker) && (
               <p>
-                <strong>Root issue:</strong> {triage.root_issue}
+                <strong>Root issue:</strong> {reportRootIssue(result)}
               </p>
             )}
             {triage.core_blocker && (
@@ -279,7 +280,9 @@ export default function ConciseDiagnostic({ result }: Props) {
               {stall.collisions.map((c, i) => (
                 <li key={i}>
                   <strong>{c.label}</strong>
-                  {c.evidence && <span className="stall-evidence"> — "{c.evidence}"</span>}
+                  {verbatimQuote(result.source_transcript ?? "", c.evidence) && (
+                    <span className="stall-evidence"> — "{verbatimQuote(result.source_transcript ?? "", c.evidence)}"</span>
+                  )}
                 </li>
               ))}
             </ul>
@@ -289,12 +292,19 @@ export default function ConciseDiagnostic({ result }: Props) {
               <span className="persona-badge persona-badge-absent">TECHNICAL APPROVAL</span>
               <p>
                 <strong>{formatAuthorityLabel(stall.technicalVeto)}</strong>
-                {stall.technicalVeto.evidence && (
-                  <span className="stall-evidence">
-                    {" "}
-                    — "{stall.technicalVeto.evidence.replace(/^"|"$/g, "")}"
-                  </span>
-                )}
+                {(() => {
+                  const transcript = result.source_transcript ?? "";
+                  const quote =
+                    verbatimQuote(transcript, stall.technicalVeto?.evidence ?? "") ||
+                    verbatimQuote(transcript, decisiveSentence(transcript, stall.technicalVeto?.name ?? "")?.text ?? "");
+                  const speaker = decisiveSentence(transcript, stall.technicalVeto?.name ?? "")?.speaker;
+                  if (!quote) return null;
+                  const said =
+                    speaker && !spokenBy(speaker, stall.technicalVeto?.name ?? "")
+                      ? ` (said by ${speaker})`
+                      : "";
+                  return <span className="stall-evidence"> — "{quote}"{said}</span>;
+                })()}
               </p>
             </div>
           )}
@@ -304,8 +314,11 @@ export default function ConciseDiagnostic({ result }: Props) {
               <p>
                 <strong>{stall.invisibleVeto.name}</strong>
                 {stall.invisibleVeto.role && ` · ${stall.invisibleVeto.role}`}
-                {stall.invisibleVeto.evidence && (
-                  <span className="stall-evidence"> — "{stall.invisibleVeto.evidence.replace(/^"|"$/g, "")}"</span>
+                {verbatimQuote(result.source_transcript ?? "", stall.invisibleVeto.evidence ?? "") && (
+                  <span className="stall-evidence">
+                    {" "}
+                    — "{verbatimQuote(result.source_transcript ?? "", stall.invisibleVeto.evidence ?? "")}"
+                  </span>
                 )}
               </p>
             </div>

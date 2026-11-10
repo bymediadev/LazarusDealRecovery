@@ -6,13 +6,22 @@ function band(value: number, cap = 100): string {
   return "high";
 }
 
-/** Explains the intent inputs already used. Does not expose raw multipliers. */
-export function intentInputTrace(rawIntent: number, constraint: number, effectiveIntent: number): string {
-  const rule = `Effective intent is ${band(effectiveIntent)} after constraint pressure (${band(constraint)}) is applied to raw intent (${band(rawIntent)}).`;
+/** Intent level already computed, capped by the constraint named in the data. */
+export function intentInputTrace(
+  rawIntent: number,
+  constraint: number,
+  effectiveIntent: number,
+  constraintName = ""
+): string {
+  const level = band(effectiveIntent);
+  const titled = level.charAt(0).toUpperCase() + level.slice(1);
+  const named = constraintName.replace(/\s+/g, " ").trim();
+  const cap = named || (constraint > 0 ? "constraint pressure" : "the open constraint");
+  const line = `${titled} but capped by ${cap}.`;
   if (rawIntent === 0) {
-    return `${rule} Raw intent is low because no Intent force was extracted. That is not a finding that the buyer has no interest.`;
+    return `${line} That is not a finding that the buyer has no interest.`;
   }
-  return `${rule} Raw intent is the strongest Intent force. It is separate from the ability to get approval.`;
+  return line;
 }
 
 export function pinnedEquilibriumNote(state: string, structural: number, constraint: number): string | null {

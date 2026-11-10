@@ -1684,7 +1684,7 @@ if (
   !/referral relationship/i.test(referralDiag.buyingSignals) ||
   !referralDiag.budget.startsWith("Consultation budget was not qualified") ||
   !/not as this person's ability or willingness to pay/i.test(referralDiag.budget) ||
-  referralDiag.urgency !== "not stated" ||
+  referralDiag.urgency !== "No urgency stated." ||
   !/no follow-up action was agreed/i.test(referralDiag.missedProcess) ||
   !/not evidence that a sale was lost/i.test(referralDiag.missedProcess) ||
   /500,000|\$1 million|Budget was discussed|Budget was qualified/i.test(referralDiag.budget) ||
@@ -1712,8 +1712,8 @@ if (
 const noTimelineDiag = diagnosticProfile(
   ["BUYER: We like what we saw.", "SELLER: Great — I will send a link.", "BUYER: Sounds good."].join("\n")
 );
-if (noTimelineDiag.urgency !== "not stated") {
-  console.error("FAIL: Urgency without a hard timeline must be exactly not stated", noTimelineDiag.urgency);
+if (noTimelineDiag.urgency !== "No urgency stated.") {
+  console.error("FAIL: Urgency without a hard timeline must read No urgency stated", noTimelineDiag.urgency);
   failed = true;
 }
 const stalledHeadlineLine = unifiedDealHeadline({
@@ -1832,8 +1832,8 @@ const sarahDiag = diagnosticProfile(sarahMarkTranscript);
 if (
   sarahDiag.budget.startsWith("MISSING") ||
   !/qualified for this purchase/i.test(sarahDiag.budget) ||
-  sarahDiag.urgency === "not stated" ||
-  !/timeline was stated/i.test(sarahDiag.urgency) ||
+  sarahDiag.urgency !== "No urgency stated." ||
+  /parked until/i.test(sarahDiag.urgency) ||
   /did not secure a decision/i.test(sarahDiag.missedProcess) ||
   !/interest in this purchase/i.test(sarahDiag.buyingSignals)
 ) {
@@ -1971,8 +1971,12 @@ if (purchaseMotion(messy).motion !== "deal_closed" || /45,000|150,000|per day/.t
 }
 const auditText = readFileSync("fixtures/transcript_3_federal_audit.txt", "utf-8");
 const auditFresh = diagnosticProfile(auditText);
-if (auditFresh.urgency.startsWith("MISSING") || /Nothing over|qualified for this purchase/i.test(auditFresh.budget)) {
-  console.error("FAIL: A 90-day freeze is a timeline and the cap is not a budget", auditFresh.urgency, auditFresh.budget);
+if (
+  auditFresh.urgency !== "No urgency stated." ||
+  /frozen for the next 90 days|park this/i.test(auditFresh.urgency) ||
+  /Nothing over|qualified for this purchase/i.test(auditFresh.budget)
+) {
+  console.error("FAIL: A spending freeze is a constraint, not urgency, and the cap is not a budget", auditFresh.urgency, auditFresh.budget);
   failed = true;
 }
 if (

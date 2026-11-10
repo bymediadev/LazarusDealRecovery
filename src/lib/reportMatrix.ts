@@ -1,4 +1,5 @@
 import { uniqueActionSteps } from "./actionSteps";
+import { verbatimQuote } from "./reportCopy";
 import { attributeQuote, capacitySubject, samePerson } from "./evidenceAttribution";
 import { forecastGuidance } from "./forecastCall";
 import { formatRecoveryAction, uniqueRecoveryNotes } from "./recoveryPlan";
@@ -610,6 +611,9 @@ const PAID_WITHOUT_AMOUNT = /\b(not free|paid consultation|paid diagnostic|clari
 const HARD_TIMELINE =
   /\b(q[1-4]|this quarter|next quarter|end of (?:the )?(?:month|quarter|year)|month-end|after month-end|next week|next month|deadline|by\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)|annual planning(?: cycle)?|(?:a |about |in about |within )?(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)(?:\s*-\s*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten))?\s*(?:day|days|week|weeks|month|months)(?!\s+ago)(?:\s+(?:workflow )?assessment|\s+organizational review|\s+planning(?: cycle)?)?)\b/i;
 const CAPACITY_METAPHOR = /\bunderwater until\b|\bswamped until\b|\bburied until\b/i;
+/** A parked, frozen, or deferred deal is a constraint, not purchase urgency. */
+const PARKED_DEAL =
+  /\b(parked until|stays parked|stay parked|this stays parked|park this|nurture until|on hold until|deferred until|frozen(?:\s+(?:for|until))?|spending freeze|not actionable today)\b/i;
 const DEAL_HORIZON =
   /\b(parked until|until q[1-4]|close (?:by|this|next)|accelerate|move(?:d)? forward|this quarter|next quarter|q[1-4])\b/i;
 /** Legacy alias used by unknownBits — same hard timeline rule. */
@@ -631,7 +635,7 @@ function urgencyEvidenceLine(buyerText: string): string {
   let match: RegExpExecArray | null;
   while ((match = re.exec(text)) !== null) {
     const sentence = sentenceAt(text, match.index, match[0].length);
-    if (!sentence || CAPACITY_METAPHOR.test(sentence)) continue;
+    if (!sentence || CAPACITY_METAPHOR.test(sentence) || PARKED_DEAL.test(sentence)) continue;
     if (!HARD_TIMELINE.test(sentence)) continue;
     matches.push({ sentence, deal: DEAL_HORIZON.test(sentence) });
   }
@@ -724,9 +728,13 @@ function defenseLines(transcript: string, motion: PurchaseMotion): Pick<
     evidenceAnchors.some((anchor) => turn.text.toLowerCase().includes(anchor.slice(0, 48)))
   );
   // Strict: only speaker turns that carry cited evidence — never dump the full transcript.
-  const said = cited.slice(0, 4).map(
-    (turn) => `${turn.speaker}: ${turn.text.replace(/\s+/g, " ").trim()}`
-  );
+  const said = cited.slice(0, 4).map((turn) => {
+    const text = turn.text
+      .replace(/\s+/g, " ")
+      .replace(/\s*\[\d{2}:\d{2}:\d{2}\]\s*$/g, "")
+      .trim();
+    return `${turn.speaker}: ${text}`;
+  });
   const happyEars =
     /\bclosed[-\s]?won\b/i.test(seller) && /\b(nothing is signed|not done|we(?:'re| are) evaluating)\b/i.test(buyer);
   const speakersKnown = parsed.labeled;
@@ -775,7 +783,7 @@ function defenseLines(transcript: string, motion: PurchaseMotion): Pick<
             : "Read only the lines above. Do not add a motion they did not state.";
   const unknownBits = [
     !QUALIFIED_PAY.test(buyer) ? "no qualified budget" : "",
-    !URGENCY.test(buyer) ? "no timeline" : "",
+    !urgencyEvidenceLine(buyer) ? "no timeline" : "",
     !meetingSet(transcript) ? "no date" : "",
   ].filter(Boolean);
   return {
@@ -954,28 +962,33 @@ export function diagnosticProfile(transcript: string): DiagnosticProfile {
   );
   const canScoreMoney = motion.motion === "deal_open" || motion.motion === "deal_closed";
 
+  const refusalQuote = verbatimQuote(text, refusalHit);
+  const interestQuote = verbatimQuote(text, interestHit);
+  const budgetQuote = verbatimQuote(text, budgetReadout.qualified);
+  const urgencyQuote = verbatimQuote(text, urgencyHit);
+
   const buyingSignals = notAPurchase
     ? hasReferralLanguage(text)
-      ? `Interest was in a referral relationship, not in purchasing this service.${refusalHit ? ` Evidence: "${refusalHit}"` : ""}`
-      : `No purchase was opened.${refusalHit ? ` Evidence: "${refusalHit}"` : ""}`
+      ? `Interest was in a referral relationship, not in purchasing this service.${refusalQuote ? ` Evidence: "${refusalQuote}"` : ""}`
+      : `No purchase was opened.${refusalQuote ? ` Evidence: "${refusalQuote}"` : ""}`
     : motion.motion === "deal_closed"
       ? motion.reason
-      : interestHit
-        ? `The buyer stated interest in this purchase. Evidence: "${interestHit}"`
+      : interestQuote
+        ? `The buyer stated interest in this purchase. Evidence: "${interestQuote}"`
         : "No explicit interest in purchasing this service was stated.";
 
   const budget =
-    canScoreMoney && budgetReadout.qualified
-      ? `Budget was qualified for this purchase. Evidence: "${budgetReadout.qualified}"`
+    canScoreMoney && budgetQuote
+      ? `Budget was qualified for this purchase. Evidence: "${budgetQuote}"`
       : budgetReadout.mentioned || budgetReadout.qualified
         ? "Consultation budget was not qualified. Budget was mentioned, but not as this person's ability or willingness to pay for the consultation."
         : PAID_WITHOUT_AMOUNT.test(text)
           ? "Consultation budget was not qualified. The seller said the offer is paid, and this person's ability or willingness to pay was not established."
           : "Consultation budget was not qualified.";
 
-  const urgency = urgencyHit
-    ? `A timeline was stated. Evidence: "${urgencyHit}"`
-    : "not stated";
+  const urgency = urgencyQuote
+    ? `A timeline was stated. Evidence: "${urgencyQuote}"`
+    : "No urgency stated.";
 
   const followUpAgreed = followUpProposedAndAgreed(text);
   const followUpProposed =
