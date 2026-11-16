@@ -1,0 +1,43 @@
+Test Transcript: Enterprise SaaS Deal Triage
+
+Call Date: November 9, 2026
+
+Participants:
+
+* **Mark Vance** (Account Executive, ApexOps)
+* **Sarah Lindqvist** (VP of Operations, Meridian Logistics)
+* **David Chen** (Director of IT Security, Meridian Logistics)
+
+Mark Vance: Morning, Sarah, David. Thanks for making the time. I know you both have swamped schedules this quarter. Sarah, when we last spoke, you mentioned wanting to look at how we could streamline the driver dispatch workflows across the Ontario hubs before the winter rush kicks in. Where's everyone's head at?
+
+Sarah Lindqvist: Morning, Mark. Yeah, look, we're definitely feeling the pressure on dispatch times, especially out of the Vaughan and Mississauga yards. Your prototype demo last month looked promising on paper. But to be completely transparent with you, we've hit a few internal speed bumps over the last two weeks. It's not a flat 'no,' but our timeline has shifted quite a bit.
+
+Mark Vance: Understood. Shifts happen, especially heading into Q4 budgeting closes. Is it a capacity constraint on your end for onboarding, or something else?
+
+Sarah Lindqvist: It's a combination of things. David here can speak to the technical side, but from my seat, finance has put a general freeze on any new software line items that exceed twenty thousand annually unless they tie directly to a mandated compliance upgrade. ApexOps sits right in that discretionary operational improvement bucket, which means it requires a formal business case review at the VP level—and our next quarterly review isn't until mid-December.
+
+Mark Vance: Ah, I see. So the budget threshold is triggering a formal governance review cycle rather than a departmental sign-off. David, does that align with what IT is seeing from the security and architecture review boards as well?
+
+David Chen: Well, Mark, that's the other half of it. Even if Sarah's team finds the budget, we ran your architecture brief through our initial risk assessment last Tuesday. Because your platform touches real-time routing telemetry and driver personal identifiers, our compliance framework classifies it as a Tier 2 data integration.
+
+Mark Vance: Right, handling driver PII and location telemetry naturally requires strict adherence to privacy standards. We are SOC 2 Type II certified and fully compliant with provincial data residency rules. Did our security packet not address those baseline controls?
+
+David Chen: It addresses the baseline, sure. But your current deployment model relies on a multi-tenant cloud instance hosted on US-west servers with regional edge routing. Our corporate policy for any system integrating into our dispatch core requires dedicated tenant isolation or a Canadian-hosted enclave. Plus, our legal counsel needs to review your data processing addendum regarding liability indemnification if a routing API drops during peak dispatch hours. That review queue is currently backed up by about three weeks.
+
+Sarah Lindqvist: And that's the real bottleneck, Mark. If David's team can't clear the security and architecture hurdles until December, and finance won't release funds without that clearance in hand, we're essentially looking at a Q1 implementation window at the earliest. That throws off our entire winter dispatch optimization goal.
+
+Mark Vance: Okay, I appreciate you both laying that out so directly. Let me make sure I'm capturing the exact blockers:
+
+1. The annual cost threshold (>20k) triggers a formal VP-level budget review in mid-December.
+2. IT security requires a Canadian-hosted enclave or dedicated tenant isolation due to PII and telemetry classification.
+3. Corporate legal needs a custom DPA review, currently sitting in a 3-week queue.
+
+If we can present a path to resolve the technical and legal items before that mid-December finance gate—such as utilizing our Canadian data residency deployment tier and providing an expedited legal DPA template pre-vetted for logistics firms—does that keep us in the running for a late November sign-off, or has the operational window definitively closed for this quarter?
+
+Sarah Lindqvist: If you guys can actually solve the hosting and legal paperwork in the next ten days, I can take a pre-vetted package to our CFO off-cycle. But David, honestly, can IT realistically turn around a security review on a modified deployment architecture in ten days given your current workload?
+
+David Chen: If they have a pre-packaged Canadian enterprise enclave ready to go with documentation we can audit directly—not just marketing brochures—we can pull it forward into our sprint next week. But I'll need the raw compliance artifacts by Thursday, Mark. Otherwise, we're sliding right past the fiscal window.
+
+Mark Vance: Fair enough. Thursday morning, I'll have the Canadian enclave architecture documentation, the pre-approved DPA, and our SOC 2 audit reports sitting in your inbox, David. Sarah, I'll follow up with you on Friday once David's team has had a preliminary look to map out the CFO presentation. Sound like a plan?
+
+Sarah Lindqvist: Sounds like a plan. Let's see what you can pull together by Thursday. Thanks, Mark.

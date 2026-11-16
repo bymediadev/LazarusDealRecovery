@@ -1,5 +1,6 @@
 import type { PostMortemResult } from "../types";
 import { readConstraint, type ConstraintKind } from "./constraintReading";
+import { normalizeTranscript } from "./transcriptNormalize";
 
 const ROOT_NOUN: Partial<Record<ConstraintKind, string>> = {
   technical_approval: "Technical sign-off",
@@ -62,15 +63,19 @@ function speakerDirectory(transcript: string): Map<string, string> {
 }
 
 function transcriptTurns(transcript: string): TranscriptTurn[] {
-  const directory = speakerDirectory(transcript);
+  const normalized = normalizeTranscript(transcript);
+  const directory = speakerDirectory(normalized);
   const turns: TranscriptTurn[] = [];
   let current: TranscriptTurn | null = null;
-  for (const line of transcript.split(/\r?\n/)) {
-    const match = line.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*([A-Za-z]{1,8}):\s*(.*)$/);
+  for (const line of normalized.split(/\r?\n/)) {
+    const stamped = line.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*([A-Za-z][A-Za-z .'-]{0,40}):\s*(.*)$/);
+    const named = line.match(/^([A-Z][A-Za-z .'-]{1,40}):\s*(.*)$/);
+    const match = stamped ?? named;
     if (!match) continue;
     if (current) turns.push(current);
-    const alias = match[2].trim();
-    current = { speaker: directory.get(alias.toLowerCase()) ?? alias, body: match[3].trim() };
+    const alias = (stamped ? stamped[2] : named?.[1] ?? "").trim();
+    const body = (stamped ? stamped[3] : named?.[2] ?? "").trim();
+    current = { speaker: directory.get(alias.toLowerCase()) ?? alias, body };
   }
   if (current) turns.push(current);
   return turns;
@@ -85,12 +90,18 @@ function namePattern(personName: string): RegExp | null {
 const NOT_A_PERSON =
   /^(yes|but|the|without|once|this|that|and|for|with|after|before|until|when|what|where|who|how|not|his|her|our|their|from|into|over|under|about|there|here|also|just|only|both|then|than|been|have|will|would|could|does|did|are|was|were|you|your|she|they|can|may|let|its|budget|legal|park|temporary|understood|should|nothing|something|anything|everything|monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|october|november|december)$/i;
 
-/** A capitalized token that is not this person and not an ordinary sentence word. */
-function citesSomeoneElse(text: string, personFirst: string): boolean {
+/** A capitalized token that is another speaker in this transcript. */
+function citesSomeoneElse(text: string, personFirst: string, speakers: string[]): boolean {
+  const known = new Set(
+    speakers
+      .flatMap((speaker) => speaker.split(/\s+/))
+      .map((part) => part.toLowerCase())
+      .filter((part) => part.length > 2)
+  );
   const tokens = text.match(/\b[A-Z][a-z]{2,}\b/g) ?? [];
   return tokens.some((token) => {
     const lower = token.toLowerCase();
-    return lower !== personFirst.toLowerCase() && !NOT_A_PERSON.test(token);
+    return lower !== personFirst.toLowerCase() && known.has(lower) && !NOT_A_PERSON.test(token);
   });
 }
 
@@ -105,6 +116,7 @@ export function decisiveSentence(
   const turns = transcriptTurns(transcript);
   const name = namePattern(personName);
   const first = personName.trim().split(/\s+/)[0] ?? "";
+  const speakers = turns.map((turn) => turn.speaker);
   if (!name || !first) return null;
   let best: { text: string; speaker: string; score: number } | null = null;
   for (let index = 0; index < turns.length; index += 1) {
@@ -115,7 +127,7 @@ export function decisiveSentence(
       const text = raw.trim();
       if (!text || text.includes("...") || !transcript.includes(text)) continue;
       // A sentence that names a different person is their evidence, not this person's.
-      if (!name.test(text) && citesSomeoneElse(text, first)) continue;
+      if (!name.test(text) && citesSomeoneElse(text, first, speakers)) continue;
       let score = 0;
       if (/not moving|won't move|will not move/i.test(text)) score += 100;
       if (/without (him|her|them)/i.test(text)) score += 80;
@@ -123,6 +135,12 @@ export function decisiveSentence(
       if (/nothing'?s approved|hasn'?t validated|has not validated/i.test(text)) score += 30;
       if (name.test(text) && /\b(missed|absent|flagged|not on (?:this |the )?call|wasn'?t on the call)\b/i.test(text)) {
         score += 40;
+      }
+      if (
+        spokenByPerson &&
+        /\b(requires|corporate policy|enclave|general freeze|review queue|pre-vetted package|off-cycle)\b/i.test(text)
+      ) {
+        score += 45;
       }
       if (name.test(text)) score += 10;
       // A bare name mention, such as a greeting, does not make the person decisive.

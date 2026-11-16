@@ -14,6 +14,7 @@ import {
   isSoleOperator,
   isTemporaryAuthorityAbsence,
   mapForcesToScores,
+  parseTurns,
   type RecoverabilityAssessment,
 } from "../src/lib/reportMatrix.js";
 
@@ -105,6 +106,8 @@ export interface FrozenDerivation {
   resolution_cycles: ResolutionCyclesFrozen;
   recoverability: RecoverabilityAssessment;
   force_trace: string[];
+  /** Set when a buyer and seller agreed a recovery step inside 14 days. */
+  recovery_posture?: "STALLED_QUALIFIED_RECOVERY" | "HIGH_FRICTION_RECOVERY";
 }
 
 function clamp(n: number, min = 0, max = 100): number {
@@ -832,18 +835,68 @@ function ensureStatedIntent(forces: ScoringForce[], transcript: string): Scoring
   ];
 }
 
+function buyerDeclarations(transcript: string): string {
+  const parsed = parseTurns(transcript);
+  const buyers = parsed.turns.filter((turn) => turn.role === "buyer");
+  const source = buyers.length ? buyers.map((turn) => turn.text).join("\n") : transcript;
+  return source
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence && !sentence.endsWith("?"))
+    .join(" ");
+}
+
+/** A seller's question is not a buyer-side operational fact. */
+function evidenceIsSellerProbe(transcript: string, evidence: string): boolean {
+  const needle = evidence
+    .replace(/^[^:\n]{0,48}:\s*/, "")
+    .trim()
+    .toLowerCase();
+  if (needle.length < 12) return false;
+  return parseTurns(transcript).turns.some((turn) => {
+    if (turn.role !== "seller" || !turn.text.includes("?")) return false;
+    return turn.text.toLowerCase().includes(needle.slice(0, Math.min(48, needle.length)));
+  });
+}
+
+function dropSellerProbes(forces: ScoringForce[], transcript: string): ScoringForce[] {
+  if (!transcript.trim()) return forces;
+  return forces.filter((force) => !evidenceIsSellerProbe(transcript, force.evidence ?? ""));
+}
+
+const RECOVERY_DAYS =
+  /\b(?:in the next |within )?(\d+|ten|two)\s+days\b|\bby\s+(?:monday|tuesday|wednesday|thursday|friday)\b/i;
+const RECOVERY_COMMITMENT = /\b(cfo|sign[- ]?off|pre-vetted package|pull it forward|sprint next week)\b/i;
+const RECOVERY_AGREED = /\b(sounds like a plan|i(?:'ll| will) have the|thursday morning)\b/i;
+
+/** A buyer condition and a seller acceptance inside two weeks. Null when the path is longer or missing. */
+export function shortTermRecovery(
+  transcript: string
+): { days: number; posture: "STALLED_QUALIFIED_RECOVERY" | "HIGH_FRICTION_RECOVERY" } | null {
+  if (!transcript.trim()) return null;
+  const parsed = parseTurns(transcript);
+  const seller = parsed.turns.filter((turn) => turn.role === "seller").map((turn) => turn.text).join(" ");
+  const buyer = parsed.turns.filter((turn) => turn.role === "buyer").map((turn) => turn.text).join(" ");
+  if (!seller.trim() || !buyer.trim()) return null;
+  const dayMatch = buyer.match(RECOVERY_DAYS) ?? seller.match(RECOVERY_DAYS);
+  if (!dayMatch) return null;
+  const token = (dayMatch[1] ?? "").toLowerCase();
+  const days = token === "ten" ? 10 : token === "two" ? 2 : token ? Number(token) : 7;
+  if (!Number.isFinite(days) || days <= 0 || days > 14) return null;
+  if (!RECOVERY_COMMITMENT.test(buyer) || !RECOVERY_AGREED.test(`${buyer}\n${seller}`)) return null;
+  return { days, posture: "HIGH_FRICTION_RECOVERY" };
+}
 const STATED_RESOURCE =
   /[^.!?\n]*\b(can'?t commit|cannot commit|no capacity|lacks capacity|another integration|capacity constraint|can'?t start|cannot start)\b[^.!?\n]*/i;
 
 /** A stated capacity limit still sets constraint pressure when extraction omits that sentence. */
 function ensureStatedResource(forces: ScoringForce[], transcript: string): ScoringForce[] {
   if (forces.some((force) => STATED_RESOURCE.test(`${force.factor} ${force.evidence}`))) return forces;
-  const quote = transcript
+  const quote = buyerDeclarations(transcript)
     .match(STATED_RESOURCE)?.[0]
-    ?.replace(/\*\*[^*]+:\*\*/g, " ")
-    .replace(/\s+/g, " ")
+    ?.replace(/\s+/g, " ")
     .trim();
-  if (!quote) return forces;
+  if (!quote || quote.includes("?")) return forces;
   return [
     ...forces,
     {
@@ -866,7 +919,8 @@ export function deriveCanonicalState(
   blockerClassification = "MIXED",
   transcript = ""
 ): { causal: CausalState; frozen: FrozenDerivation; transforms: ForceTransform[] } {
-  const withIntent = ensureStatedResource(ensureStatedIntent(rawForces, transcript), transcript);
+  const admitted = dropSellerProbes(rawForces, transcript);
+  const withIntent = ensureStatedResource(ensureStatedIntent(admitted, transcript), transcript);
   const transforms: ForceTransform[] = [];
   for (const force of withIntent) {
     if (rawForces.some((prior) => prior.factor === force.factor && prior.evidence === force.evidence)) continue;
@@ -962,7 +1016,15 @@ export function deriveCanonicalState(
     constraint_pressure,
     enabler_strength
   );
-  const viability_score = viabilityScore(
+  const recovery = shortTermRecovery(transcript);
+  const heavyBlock =
+    structural_lock_in >= 80 || constraint_pressure >= 70 || enabler_strength < 80;
+  const posture = recovery
+    ? heavyBlock
+      ? "HIGH_FRICTION_RECOVERY"
+      : "STALLED_QUALIFIED_RECOVERY"
+    : undefined;
+  let viability_score = viabilityScore(
     intent_strength,
     effective_intent,
     timing_factor,
@@ -971,14 +1033,21 @@ export function deriveCanonicalState(
     enabler_strength,
     blocker
   );
+  if (recovery && viability_score < 30) {
+    const guarded = clamp(Math.round(20 + enabler_strength * 0.25 + intent_strength * 0.15));
+    viability_score = Math.min(52, Math.max(viability_score, guarded));
+  }
   const equilibrium_state = equilibrium(structural_lock_in, constraint_pressure);
-  const trajectory_type = trajectory(
+  let trajectory_type = trajectory(
     viability_score,
     constraint_pressure,
     structural_lock_in,
     enabler_strength,
     blocker
   );
+  if (recovery && (trajectory_type === "DEFERRED (locked)" || trajectory_type === "NON-VIABLE / DEAD")) {
+    trajectory_type = "DEFERRED (recoverable)";
+  }
   const viability_state = viabilityLabel(
     viability_score,
     structural_lock_in,
@@ -1028,7 +1097,7 @@ export function deriveCanonicalState(
     trajectory_type,
   };
 
-  const recoverability = classifyRecoverability({
+  let recoverability = classifyRecoverability({
     viability: viability_score,
     trajectory: trajectory_type,
     blocker,
@@ -1036,6 +1105,19 @@ export function deriveCanonicalState(
     forces,
     evidence: transcript,
   });
+  if (
+    recovery &&
+    posture &&
+    recoverability.status !== "RECOVERABLE" &&
+    recoverability.status !== "CONDITIONALLY_RECOVERABLE"
+  ) {
+    recoverability = {
+      ...recoverability,
+      status: "CONDITIONALLY_RECOVERABLE",
+      confidence: Math.max(recoverability.confidence, 60),
+      explanation: `Conditionally recoverable. The buyer and seller agreed a path inside ${recovery.days} days. Posture ${posture}. Viability ${viability_score} is the guarded result, not a closed deal.`,
+    };
+  }
 
   const frozen: FrozenDerivation = {
     ...frozenBase,
@@ -1044,7 +1126,10 @@ export function deriveCanonicalState(
     decision_freedom,
     recoverability,
     force_trace: mapped.trace,
-    derivation_formula: formatFormula({ ...frozenBase, trajectory_type }),
+    recovery_posture: posture,
+    derivation_formula: `${formatFormula({ ...frozenBase, trajectory_type })}${
+      posture ? ` Recovery ${posture}.` : ""
+    }`,
     resolution_cycles: {
       convergence_status: "converged",
       total_cycles: 3,

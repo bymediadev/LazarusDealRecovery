@@ -1,5 +1,6 @@
 import { uniqueActionSteps } from "./actionSteps";
 import { verbatimQuote } from "./reportCopy";
+import { inferVendorLead, normalizeTranscript, sellerNames } from "./transcriptNormalize";
 import { attributeQuote, capacitySubject, samePerson } from "./evidenceAttribution";
 import { forecastGuidance } from "./forecastCall";
 import { formatRecoveryAction, uniqueRecoveryNotes } from "./recoveryPlan";
@@ -122,7 +123,7 @@ export function explicitClientRefusal(transcript: string): boolean {
 }
 /** A purchase act the buyer states. The word "budget" alone is not one. */
 const PURCHASE_ACT =
-  /\b(not moving this forward|signs? off|has to approve|have to approve|needs to approve|buys in|we can accelerate|send (?:me )?a proposal|platform fee|\bin range\b|signing authority|annual contract|we modeled|nothing is signed|weigh in|platform budget)\b/i;
+  /\b(not moving this forward|signs? off|has to approve|have to approve|needs to approve|buys in|we can accelerate|send (?:me )?a proposal|platform fee|\bin range\b|signing authority|annual contract|we modeled|nothing is signed|weigh in|platform budget|software line items|business case review|implementation window|pre-vetted package|take [\w\s'-]{0,40} to (?:our |the )?cfo)\b/i;
 const BUYER_WON =
   /\b(contract is executed|closed-won|procurement issued the po|issued the po for)\b/i;
 const BUYER_LOST =
@@ -139,26 +140,10 @@ export interface TranscriptTurn {
 }
 
 const SELLER_ROLE =
-  /\b(account executive|\bae\b|enterprise ae|sales rep(?:resentative)?|account rep|sdr|bdr)\b/i;
+  /\b(account executive|\bae\b|enterprise ae|account manager|\bam\b|solutions engineer|vp of sales|sales rep(?:resentative)?|account rep|\bsdr\b|\bbdr\b)\b/i;
 
 function sellersFromHeader(transcript: string): Set<string> {
-  const sellers = new Set<string>();
-  const blob = transcript.replace(/\r/g, "");
-  for (const match of blob.matchAll(
-    /\(([A-Za-z]{1,5})\)\s*[–—-][^()\n]{0,160}?\b(account executive|\bae\b|enterprise ae|sales rep(?:resentative)?)\b/gi
-  )) {
-    sellers.add(match[1].toLowerCase());
-  }
-  // "Marcus Reed — Sales Representative" / "**Marcus Reed — Sales Representative**"
-  for (const match of blob.matchAll(
-    /(?:^|\n)\s*\**([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,2})\**\s*[–—-]\s*\**[^\n]*?\b(account executive|\bae\b|enterprise ae|sales rep(?:resentative)?|account rep)\b/gi
-  )) {
-    const full = match[1].replace(/\*+/g, "").trim();
-    const first = full.split(/\s+/)[0] ?? "";
-    if (first) sellers.add(first.toLowerCase());
-    if (full) sellers.add(full.toLowerCase());
-  }
-  return sellers;
+  return sellerNames(transcript);
 }
 
 function sellerLabel(name: string, sellers: Set<string>): boolean {
@@ -222,9 +207,10 @@ function expandSpeakerBreaks(transcript: string): string {
 /** Split a labeled transcript into speaker turns. Continuation lines stay with the current speaker. */
 export function parseTurns(transcript: string): { labeled: boolean; turns: TranscriptTurn[] } {
   const turns: TranscriptTurn[] = [];
-  const cleaned = sanitizeTranscriptForDisplay(transcript ?? "");
+  const normalized = normalizeTranscript(transcript ?? "");
+  const cleaned = sanitizeTranscriptForDisplay(normalized);
   const expanded = expandSpeakerBreaks(cleaned);
-  const sellers = sellersFromHeader(expandSpeakerBreaks(transcript ?? ""));
+  const sellers = sellersFromHeader(transcript ?? "");
   let labeled = false;
   let current: TranscriptTurn | null = null;
   for (const rawLine of expanded.split(/\n/)) {
@@ -254,6 +240,14 @@ export function parseTurns(transcript: string): { labeled: boolean; turns: Trans
     else {
       current = { speaker: "", role: "unknown", text: extra };
       turns.push(current);
+    }
+  }
+  if (labeled && !turns.some((turn) => turn.role === "seller")) {
+    const lead = inferVendorLead(turns.map((turn) => ({ speaker: turn.speaker, body: turn.text })));
+    if (lead) {
+      for (const turn of turns) {
+        if (turn.speaker.toLowerCase() === lead.toLowerCase()) turn.role = "seller";
+      }
     }
   }
   return { labeled, turns };
@@ -611,6 +605,11 @@ const PAID_WITHOUT_AMOUNT = /\b(not free|paid consultation|paid diagnostic|clari
 const HARD_TIMELINE =
   /\b(q[1-4]|this quarter|next quarter|end of (?:the )?(?:month|quarter|year)|month-end|after month-end|next week|next month|deadline|by\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)|annual planning(?: cycle)?|(?:a |about |in about |within )?(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)(?:\s*-\s*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten))?\s*(?:day|days|week|weeks|month|months)(?!\s+ago)(?:\s+(?:workflow )?assessment|\s+organizational review|\s+planning(?: cycle)?)?)\b/i;
 const CAPACITY_METAPHOR = /\bunderwater until\b|\bswamped until\b|\bburied until\b/i;
+/** A greeting that mentions a season is not a deal deadline. */
+const PLEASANTRY =
+  /\b(swamped schedules|thanks for (?:making|your) time|making the time|good to (?:meet|see) you|hope you(?:'re| are) well|how are you|morning[, ]|appreciate you both)\b/i;
+const DECISION_GATE =
+  /\b(mid-december|by\s+(?:monday|tuesday|wednesday|thursday|friday)|in the next \d+ days|next ten days|ten days|q[1-4] implementation|implementation window|fiscal window)\b/i;
 /** A parked, frozen, or deferred deal is a constraint, not purchase urgency. */
 const PARKED_DEAL =
   /\b(parked until|stays parked|stay parked|this stays parked|park this|nurture until|on hold until|deferred until|frozen(?:\s+(?:for|until))?|spending freeze|not actionable today)\b/i;
@@ -635,9 +634,9 @@ function urgencyEvidenceLine(buyerText: string): string {
   let match: RegExpExecArray | null;
   while ((match = re.exec(text)) !== null) {
     const sentence = sentenceAt(text, match.index, match[0].length);
-    if (!sentence || CAPACITY_METAPHOR.test(sentence) || PARKED_DEAL.test(sentence)) continue;
+    if (!sentence || CAPACITY_METAPHOR.test(sentence) || PARKED_DEAL.test(sentence) || PLEASANTRY.test(sentence)) continue;
     if (!HARD_TIMELINE.test(sentence)) continue;
-    matches.push({ sentence, deal: DEAL_HORIZON.test(sentence) });
+    matches.push({ sentence, deal: DEAL_HORIZON.test(sentence) || DECISION_GATE.test(sentence) });
   }
   if (!matches.length) return "";
   const preferred = matches.find((item) => item.deal) ?? matches[0];
@@ -1207,7 +1206,7 @@ const TEMPORARY_DURATION =
 const CONDITIONAL_DURATION =
   /\b(financial case|can'?t commit|cannot commit|defensible|validated savings|if independently|when the|once the|if .{0,40}buys in|without (?:him|her|them).{0,60}(?:moving|proceed|forward|parked|accelerate))\b/i;
 const PATH_FORWARD =
-  /\b(hasn'?t disappeared|has not disappeared|still looking|don'?t think we should close|do not think we should close|bringing it back|bring it back|comfortable bringing|send (me )?the outline|will approve if|can begin next quarter|not necessarily impossible|(?:we )?can accelerate|if .{0,40}buys in|parked until|like what i saw|do that)\b/i;
+  /\b(hasn'?t disappeared|has not disappeared|still looking|don'?t think we should close|do not think we should close|bringing it back|bring it back|comfortable bringing|send (me )?the outline|will approve if|can begin next quarter|not necessarily impossible|(?:we )?can accelerate|if .{0,40}buys in|parked until|like what i saw|do that|off-cycle|pre-vetted package|sounds like a plan)\b/i;
 const CLOSED_PATH = [
   /\b(selected|chose|chosen|awarded the business to|going with|went with)\b(?:\s+\w+){0,8}\b(competitor|another vendor|another platform|flowtrack)\b/i,
   /\b(terminated|ended|cancelled|canceled) the (evaluation|process|opportunity)\b/i,
