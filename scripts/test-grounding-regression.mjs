@@ -130,12 +130,16 @@ if (!/Technical approval dependency/i.test(crm)) {
   console.error("REGRESSION FAILED: CRM people map missing technical approval dependency", crm);
   process.exit(1);
 }
-if (!/No missing authority\. Dave, VP of Infrastructure, is the technical approval dependency/i.test(crm)) {
-  console.error("REGRESSION FAILED: CRM dropped the technical approval dependency", crm.match(/Invisible veto[^\n]*/)?.[0]);
+if (!/Dave, VP of Infrastructure, missed the demo/i.test(crm) || !/\*\*Authority gap:\*\* Yes/.test(crm)) {
+  console.error("REGRESSION FAILED: CRM dropped the technical approval dependency", crm.match(/Exactly what's going on[\s\S]{0,400}/)?.[0]);
   process.exit(1);
 }
-if (/\*\*Invisible veto \/ missing authority:\*\* Not identified\b/i.test(crm)) {
-  console.error("REGRESSION FAILED: identified technical veto was reported as unidentified", crm.match(/Invisible veto[^\n]*/)?.[0]);
+if (/No missing authority/i.test(crm)) {
+  console.error("REGRESSION FAILED: authority gap Yes was described as no missing authority", crm.match(/Exactly what's going on[\s\S]{0,400}/)?.[0]);
+  process.exit(1);
+}
+if (/\bnot identified\b/i.test(crm.match(/Exactly what's going on[\s\S]{0,400}/)?.[0] ?? "")) {
+  console.error("REGRESSION FAILED: identified technical veto was reported as unidentified", crm.match(/Exactly what's going on[\s\S]{0,400}/)?.[0]);
   process.exit(1);
 }
 

@@ -118,10 +118,10 @@ const output = formatCompressedCrmNotes({
   source_transcript: transcript,
 });
 
-const vetoLine = output.match(/\*\*Invisible veto \/ missing authority:\*\*[^\n]*/)?.[0] ?? "";
+const goingOn = output.split("### Exactly what's going on")[1]?.split("###")[0] ?? "";
 const daveBlock = output.split("**Technical approval dependency:**")[1]?.split(/\n\*\*/)[0] ?? "";
 const urgencyLine = output.match(/\*\*Urgency and timeline:\*\*[^\n]*/)?.[0] ?? "";
-const rootLine = output.match(/\*\*Root issue:\*\*[^\n]*/)?.[0] ?? "";
+const missedLine = output.match(/\*\*Missed process step:\*\*[^\n]*/)?.[0] ?? "";
 const quotes = [...output.matchAll(/"([^"]*)"/g)].map((match) => match[1]);
 
 check(
@@ -146,20 +146,75 @@ check(
 );
 const forbiddenAuthority = ["is the", "identified"].join(" ");
 check(
-  "invisible veto line names the technical approval dependency",
-  vetoLine.includes("technical approval dependency") && !vetoLine.includes(forbiddenAuthority),
-  vetoLine
+  "the overview is one situation sentence and does not restate the label stack",
+  /The deal is stalled because Dave, VP of Infrastructure, missed the demo, and Mark will not move without him\. Budget is real\. There is no date\./.test(goingOn) &&
+    !/\*\*Root issue:\*\*/.test(goingOn) &&
+    !/\*\*Intent:\*\*/.test(goingOn) &&
+    !/\*\*Core blocker:\*\*/.test(goingOn) &&
+    !/\*\*Invisible veto/.test(goingOn) &&
+    !/\*\*Why it's stuck:\*\*/.test(goingOn) &&
+    !goingOn.includes(forbiddenAuthority),
+  goingOn.trim()
 );
 check(
-  "Dave evidence quotes the decisive sentence and does not say not stated",
-  daveBlock.includes("Without him, I'm not moving this forward.") && !/not stated/i.test(daveBlock),
+  "overview names the same approver the snapshot marks as an authority gap",
+  pi.authority_gap_flag === true &&
+    /Dave, VP of Infrastructure, missed the demo/.test(goingOn) &&
+    !/No missing authority/.test(goingOn) &&
+    /\*\*Authority gap:\*\* Yes/.test(output),
+  goingOn.trim()
+);
+const topHalf = output.split("### Snapshot metrics")[0] ?? output;
+const blockerQuote = "Without him, I'm not moving this forward.";
+const blockerQuoteHits = topHalf.split(blockerQuote).length - 1;
+check(
+  "the blocker quote is kept in the people map and not repeated more than twice above the snapshot",
+  blockerQuoteHits >= 1 && blockerQuoteHits <= 2,
+  blockerQuoteHits
+);
+check(
+  "the overview does not dump viability, dominant factor, or band labels",
+  !/\*\*Why it's stuck:\*\*/.test(output) &&
+    !/Viability\s+\d+/.test(goingOn) &&
+    !/Dominant factor:/i.test(goingOn) &&
+    !/Effective intent:/i.test(goingOn) &&
+    !/Trajectory DEFERRED/i.test(goingOn),
+  goingOn.trim()
+);
+check(
+  "the snapshot says why the two scores can match",
+  /Risk is high because the deal is sitting on an absent approver\./.test(output) &&
+    /Viability stays open because Mark will restart if Dave buys in\./.test(output),
+  output.match(/Snapshot metrics[\s\S]*?(?=\n---|\n## )/)?.[0]
+);
+const whoSection = output.split("### Who needs to do what")[1]?.split(/\n### /)[0] ?? "";
+const doSection = output.split("### What to do")[1]?.split("### Snapshot metrics")[0] ?? "";
+check(
+  "numbered actions sit together under What to do",
+  /^\d+\.\s+\S/m.test(doSection) && !/^\s*\d+\.\s+\S/m.test(whoSection),
+  { who: whoSection.slice(0, 400), todo: doSection.slice(0, 700) }
+);
+check(
+  "action steps do not print raw Activity or Current status labels",
+  !/^Activity$/m.test(doSection) && !/Current status:/i.test(doSection) && /\[Proposed\]/.test(doSection),
+  doSection.slice(0, 700)
+);
+check(
+  "metric legend explains why risk and viability are not inverses",
+  /not the inverse of Viability/i.test(output) && /Independent of Deal Risk Score/i.test(output)
+);
+check(
+  "Dave's card states Mark's dependency and does not repeat Mark's sentence",
+  /Mark will not move until Dave signs off\./.test(daveBlock) &&
+    !daveBlock.includes(blockerQuote) &&
+    !/not stated/i.test(daveBlock),
   daveBlock
 );
 const comparedIntent = ["Effective intent", "low from intent moderate"].join(" ");
 check(
   "output does not compare intent bands",
-  !output.includes(comparedIntent) && /but capped by /.test(output),
-  output.match(/Intent:\*\*[^\n]*/)?.[0]
+  !output.includes(comparedIntent) && !/but capped by /.test(goingOn),
+  goingOn.match(/Intent:\*\*[^\n]*/)?.[0]
 );
 check(
   "Structural 0 is absent wherever Deal Risk is above 70",
@@ -197,9 +252,13 @@ check(
 const onePagerHits = output.split(onePager).length - 1;
 check("the Dave one-pager action string appears exactly once", onePagerHits === 1, { hits: onePagerHits });
 check(
-  "a repeated action is cross-referenced by number",
-  /See 1\./.test(output),
-  output.match(/What to do[\s\S]{0,700}/)?.[0]
+  "empty month buckets are omitted and the meeting outranks the one-pager",
+  !/See \d+\./.test(output) &&
+    /\*\*Stated checkpoint:\*\*\s*\n1\. Propose three technical meeting slots after month-end/.test(doSection) &&
+    /2\. Send a one-pager for Dave this week[^\n]*the step that gets Dave to the meeting/.test(doSection) &&
+    /Recommended next move:\*\* Propose three technical meeting slots after month-end/.test(whoSection) &&
+    !/schedule validation/i.test(whoSection),
+  { who: whoSection.slice(0, 500), todo: doSection.slice(0, 800) }
 );
 
 check(
@@ -223,11 +282,9 @@ check(
 );
 
 check(
-  "root issue is a short noun phrase and does not name a person",
-  rootLine.length > 0 &&
-    !/\b(Dave|Mark|Sarah|O'Brien|Chen)\b/.test(rootLine) &&
-    rootLine.replace(/\*\*Root issue:\*\*\s*/, "").trim().split(/\s+/).length <= 6,
-  rootLine
+  "the missed step is the demo Dave missed",
+  /missed the technical demo/i.test(missedLine) && !/follow-up action was proposed and agreed/i.test(missedLine),
+  missedLine
 );
 
 function walk(dir, files) {
@@ -266,11 +323,16 @@ check(
   markBlock
 );
 check(
-  "Dave's evidence names the speaker",
-  /said by Mark O'Brien/.test(daveBlock),
+  "Dave's card does not borrow Mark's sentence",
+  !/said by Mark/i.test(daveBlock) && !daveBlock.includes(blockerQuote),
   daveBlock
 );
 const said = output.match(/### What was said[\s\S]*?(?=\n### )/)?.[0] ?? "";
+check(
+  "what was said includes the sentence the deal turns on",
+  said.includes(blockerQuote),
+  said
+);
 check("said lines do not carry a trailing timestamp", said.length > 0 && !/\[\d{2}:\d{2}:\d{2}\]/.test(said), said);
 check(
   "unknown does not claim a timeline when none was stated",
@@ -328,13 +390,14 @@ const federalReport = formatCompressedCrmNotes({
   },
   viability_state: { state: "DEFERRED VIABILITY", viability_score: 20, equilibrium_derivation: "Structural 0. Constraint elevated." },
 });
-const federalVeto = federalReport.match(/\*\*Invisible veto \/ missing authority:\*\* ([^\n]+)/)?.[1] ?? "";
+const federalGoing = federalReport.split("### Exactly what's going on")[1]?.split("###")[0] ?? "";
+const federalDave = federalReport.split("**Technical approval dependency:**")[1]?.split(/\n\*\*/)[0] ?? "";
 const federalUrgency = diagnosticProfile(federal).urgency;
-check("a mapped authority is not described as never appearing", !/never appears/i.test(federalVeto), federalVeto);
+check("a mapped authority is not described as never appearing", !/never appears/i.test(federalGoing), federalGoing);
 check(
-  "Dave's veto clause is his own sentence",
-  /Dave from IT security also flagged/.test(federalVeto) && !/Richard is supportive/.test(federalVeto),
-  federalVeto
+  "Dave's card does not use Richard's sentence",
+  !/Richard is supportive/.test(federalDave) && !/never appears/i.test(federalDave),
+  federalDave
 );
 check(
   "a spending freeze is not cited as urgency",

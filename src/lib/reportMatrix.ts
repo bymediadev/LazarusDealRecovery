@@ -727,7 +727,14 @@ function defenseLines(transcript: string, motion: PurchaseMotion): Pick<
     evidenceAnchors.some((anchor) => turn.text.toLowerCase().includes(anchor.slice(0, 48)))
   );
   // Strict: only speaker turns that carry cited evidence — never dump the full transcript.
-  const said = cited.slice(0, 4).map((turn) => {
+  const blockerTurn = labeledTurns.find((turn) =>
+    /not moving this forward|will not move|won'?t move/i.test(turn.text)
+  );
+  const chosen =
+    blockerTurn && !cited.slice(0, 4).includes(blockerTurn)
+      ? [...cited.slice(0, 3), blockerTurn]
+      : cited.slice(0, 4);
+  const said = chosen.map((turn) => {
     const text = turn.text
       .replace(/\s+/g, " ")
       .replace(/\s*\[\d{2}:\d{2}:\d{2}\]\s*$/g, "")
@@ -946,6 +953,14 @@ function budgetRead(transcript: string): { qualified: string; mentioned: boolean
   return { qualified, mentioned: /\bbudget\b/i.test(asProse(transcript)) };
 }
 
+function missedDemoClause(transcript: string): string {
+  const text = asProse(transcript);
+  const match = text.match(/[A-Z][a-z]+(?:,[^.]{1,80})?,? missed the (?:technical )?demo[^.]*/);
+  const clause = match?.[0]?.replace(/\s+/g, " ").trim() ?? "";
+  if (!clause) return "";
+  return clause.endsWith(".") ? clause : `${clause}.`;
+}
+
 /** Qualification read for every upload. A non-purchase still reports what was missing. */
 export function diagnosticProfile(transcript: string): DiagnosticProfile {
   const text = transcript ?? "";
@@ -990,11 +1005,14 @@ export function diagnosticProfile(transcript: string): DiagnosticProfile {
     : "No urgency stated.";
 
   const followUpAgreed = followUpProposedAndAgreed(text);
+  const demoMiss =
+    !notAPurchase && motion.motion !== "unresolved" ? missedDemoClause(text) : "";
   const followUpProposed =
     CALENDAR_STEP.test(asProse(turnsText(parseTurns(text).turns, "seller"))) ||
     CALENDAR_STEP.test(buyer);
-  const missedProcess =
-    notAPurchase && PAID_OFFER.test(text) && !followUpAgreed
+  const missedProcess = demoMiss
+    ? demoMiss
+    : notAPurchase && PAID_OFFER.test(text) && !followUpAgreed
       ? "The seller introduced a paid consultation before confirming it was relevant. No follow-up action was agreed. This is not evidence that a sale was lost."
       : PAID_OFFER.test(text) && !followUpAgreed
         ? "The seller introduced a paid consultation and no follow-up action was explicitly agreed. The next step left on the call was a link, not a meeting."

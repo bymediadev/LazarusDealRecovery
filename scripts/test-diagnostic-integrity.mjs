@@ -351,12 +351,13 @@ const crm = formatCompressedCrmNotes({
   source_transcript: transcript,
 });
 check(
-  "CRM names Dave as the technical veto and does not call him unidentified",
-  /No missing authority\. Dave, VP of Infrastructure, is the technical approval dependency/.test(crm) &&
+  "CRM names Dave as the technical veto and states the same authority gap as the snapshot",
+  /The deal is stalled because Dave, VP of Infrastructure, missed the demo/.test(crm) &&
+    /\*\*Authority gap:\*\* Yes/.test(crm) &&
     /Technical approval dependency:\*\*\s*\n- Dave \(VP of Infrastructure\)/i.test(crm) &&
-    !/Invisible veto \/ missing authority:\*\* None identified/i.test(crm) &&
+    !/No missing authority/.test(crm) &&
     !crm.includes(["is the", "identified"].join(" ")),
-  crm.match(/Invisible veto[^\n]*/)?.[0]
+  crm.match(/Exactly what's going on[\s\S]{0,500}/)?.[0]
 );
 check(
   "why it's stuck states each level once",
@@ -375,10 +376,10 @@ check(
   frozen.derivation_formula
 );
 check(
-  "Dave's people-map line quotes Mark's sentence",
-  /Evidence: "Without him, I'm not moving this forward\." \(said by Mark O'Brien\)/.test(crm) &&
-    !/not stated/i.test(crm.match(/Technical approval dependency:[\s\S]*?\n\n/)?.[0] ?? ""),
-  crm.match(/Evidence: "Without him[^"]*" \(said by [^)]+\)/)?.[0]
+  "Dave's people-map line states the dependency without repeating Mark's sentence",
+  /Mark will not move until Dave signs off\./.test(crm.match(/Technical approval dependency:[\s\S]*?\n\n/)?.[0] ?? "") &&
+    !/Evidence: "Without him/.test(crm.match(/Technical approval dependency:[\s\S]*?\n\n/)?.[0] ?? ""),
+  crm.match(/Technical approval dependency:[\s\S]*?\n\n/)?.[0]
 );
 check(
   "status line is one string and the forecast line carries the reason",

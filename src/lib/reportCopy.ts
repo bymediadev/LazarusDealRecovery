@@ -152,6 +152,14 @@ export function decisiveSentence(
 }
 
 /** True when the turn speaker is this person, including a full name against a first name. */
+/** Full speaker name for the turn that contains this text, when the header names them. */
+export function speakerOfText(transcript: string, needle: string): string {
+  const cleaned = needle.replace(/\s+/g, " ").trim();
+  if (cleaned.length < 4) return "";
+  const hit = transcriptTurns(transcript).find((turn) => turn.body.includes(cleaned));
+  return hit?.speaker ?? "";
+}
+
 export function spokenBy(speaker: string, personName: string): boolean {
   const left = speaker.trim().toLowerCase();
   const right = personName.trim().toLowerCase();

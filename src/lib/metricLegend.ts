@@ -21,7 +21,7 @@ export const METRIC_LEGEND: readonly MetricLegendEntry[] = [
     id: "deal-risk-score",
     term: "Deal Risk Score",
     definition:
-      "Non-linear Deal Risk Index from stage velocity decay, unanswered-touch entropy, sentiment memory, and stakeholder authority weights. Force Interaction maps evidence; the matrix writes this score. Not a close probability.",
+      "Non-linear Deal Risk Index from stage velocity decay, unanswered-touch entropy, sentiment memory, and stakeholder authority weights. Force Interaction maps evidence; the matrix writes this score. Not a close probability. Not the inverse of Viability: a deal can carry elevated structural or stall risk and still keep moderate-to-high recovery viability, because this score reads stall and loss pressure rather than whether a recovery path remains open.",
     reportMapsTo:
       "Shows as the top Forecast snapshot score and Deal Risk Index in the report / CRM notes.",
     scoreKey: "deal_risk_index",
@@ -57,7 +57,7 @@ export const METRIC_LEGEND: readonly MetricLegendEntry[] = [
     id: "recoverable-vs-flat-no",
     term: "Viability",
     definition:
-      "The result of the viability formula. A score of zero means the formula floored. It is not a judgment that recovery is impossible.",
+      "The result of the viability formula. A score of zero means the formula floored. It is not a judgment that recovery is impossible. Independent of Deal Risk Score: viability measures whether a recovery path is still open, so it can stay moderate or high while structural or stall risk is elevated.",
     reportMapsTo: "Shows as Viability on the Forecast snapshot. Recoverability is a separate status.",
     scoreKey: "viability_score",
   },

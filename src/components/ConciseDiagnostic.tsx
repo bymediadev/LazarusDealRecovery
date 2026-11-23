@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { findInvisibleVetoOrMissingAuthority, findTechnicalVetoHolder, formatAuthorityLabel } from "../lib/authorityRoles";
-import { formatCompressedCrmNotes } from "../lib/crmNotes";
-import { decisiveSentence, reportRootIssue, spokenBy, verbatimQuote } from "../lib/reportCopy";
+import { formatCompressedCrmNotes, situationSentence } from "../lib/crmNotes";
+import { decisiveSentence, spokenBy, verbatimQuote } from "../lib/reportCopy";
 import { PostMortemResult, RescueTriagePlan, StakeholderSignal } from "../types";
 
 interface Props {
@@ -160,27 +160,34 @@ export default function ConciseDiagnostic({ result }: Props) {
 
   const hasPlan = timeline.some((t) => t.items.length > 0);
   const triage = result.live_deal_triage;
+  const situation = situationSentence(result);
   const historyMatches = result.historical_context_match ?? [];
   const friction = result.friction_deltas;
   const immediate = result.immediate_remediation ?? [];
 
   return (
     <div className="concise-diagnostic">
-      {triage && (triage.root_issue || triage.core_blocker) && (
+      {(situation || (triage && (triage.root_issue || triage.core_blocker))) && (
         <article className="card card-amber concise-card">
           <h2 className="card-title">Live Deal Triage</h2>
           <div className="card-body">
-            {(triage.root_issue || triage.core_blocker) && (
-              <p>
-                <strong>Root issue:</strong> {reportRootIssue(result)}
-              </p>
+            {situation ? (
+              <p>{situation}</p>
+            ) : (
+              <>
+                {(triage?.root_issue || triage?.core_blocker) && (
+                  <p>
+                    <strong>Root issue:</strong> {triage?.root_issue || triage?.core_blocker}
+                  </p>
+                )}
+                {triage?.core_blocker && triage.root_issue && (
+                  <p>
+                    <strong>Core blocker:</strong> {triage.core_blocker}
+                  </p>
+                )}
+              </>
             )}
-            {triage.core_blocker && (
-              <p>
-                <strong>Core blocker:</strong> {triage.core_blocker}
-              </p>
-            )}
-            {triage.department_friction_index > 0 && (
+            {(triage?.department_friction_index ?? 0) > 0 && (
               <p className="meta-line">
                 Department friction index: {triage.department_friction_index}
               </p>
